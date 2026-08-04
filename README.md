@@ -21,7 +21,7 @@ GTR Manager is distributed together with GTR.
 Check installed version:
 
 ```bash
-gtr version
+gtr-manager version
 ```
 
 ---
@@ -62,7 +62,7 @@ Example:
 Create a new project.
 
 ```bash
-gtr new project-name
+gtr-manager new project-name
 ```
 
 If the directory does not exist, it will be created.
@@ -76,13 +76,13 @@ If the directory exists, it must be empty.
 Initialize the current directory.
 
 ```bash
-gtr init
+gtr-manager init
 ```
 
 Specify project name.
 
 ```bash
-gtr init my-project
+gtr-manager init my-project
 ```
 
 During initialization several questions will be asked:
@@ -102,7 +102,7 @@ What is entrypoint?
 Install a dependency.
 
 ```bash
-gtr install repo/router
+gtr-manager install repo/router
 ```
 
 Default version:
@@ -114,15 +114,15 @@ Default version:
 Specify version:
 
 ```bash
-gtr install repo/router@^1
+gtr-manager install repo/router@^1
 ```
 
 ```bash
-gtr install repo/router@1.2
+gtr-manager install repo/router@1.2
 ```
 
 ```bash
-gtr install repo/router@1.2.5
+gtr-manager install repo/router@1.2.5
 ```
 
 ---
@@ -132,7 +132,7 @@ gtr install repo/router@1.2.5
 Remove a dependency.
 
 ```bash
-gtr uninstall repo/router
+gtr-manager uninstall repo/router
 ```
 
 ---
@@ -142,19 +142,19 @@ gtr uninstall repo/router
 Run the `start` script.
 
 ```bash
-gtr run
+gtr-manager run
 ```
 
 or
 
 ```bash
-gtr start
+gtr-manager start
 ```
 
 Run a named script.
 
 ```bash
-gtr run build
+gtr-manager run build
 ```
 
 Example:
