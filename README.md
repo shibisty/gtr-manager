@@ -10,6 +10,8 @@ It is responsible for:
 
 GTR Manager is executed by the `gtr` launcher. End users normally interact only with the `gtr` command.
 
+[![Patreon](https://c5.patreon.com/external/logo/become_a_patron_button.png)](https://www.patreon.com/cw/shibisty)
+
 ---
 
 # Installation
@@ -243,3 +245,7 @@ Pre-release
 # License
 
 MIT License.
+
+[![Patreon](https://c5.patreon.com/external/logo/become_a_patron_button.png)](https://www.patreon.com/cw/shibisty)
+
+If this project helps you, consider supporting its development on Patreon ❤️

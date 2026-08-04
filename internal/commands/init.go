@@ -35,6 +35,7 @@ func Init(args []string) error {
         Engine:       ">=1.26",
         Dependencies: map[string]string{},
         Scripts: map[string]string{
+            "start": "go run .",
             "build": "go build",
             "test":  "go test",
         },
