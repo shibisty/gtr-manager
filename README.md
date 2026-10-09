@@ -7,6 +7,7 @@ It is responsible for:
 - Project initialization
 - Dependency management
 - Script execution
+- Workspaces (families of packages developed together)
 
 GTR Manager is executed by the `gtr` launcher. End users normally interact only with the `gtr` command.
 
@@ -37,11 +38,20 @@ gtr self unlink gtr           # back to releases
 
 ## Releases
 
-Pushing a tag `v1.2.3` runs `release.workflow.yml` (move it to
-`.github/workflows/release.yml`): tests, then `./release.sh v1.2.3` builds
+Pushing a tag `v1.2.3` runs `.github/workflows/release.workflow.yml`: tests, then
+`./release.sh v1.2.3` builds
 `gtr-manager_<version>_<os>_<arch>.zip|tar.gz` for Windows, Linux and macOS
 (amd64, arm64) plus `SHA256SUMS`, and publishes them as a GitHub release. `gtr`
-refuses archives that don't match `SHA256SUMS`.
+refuses archives that don't match `SHA256SUMS`. No release has been published yet.
+
+## Development
+
+```bash
+go vet ./... && go test ./...      # unit tests; some use the go command and the module cache
+make build                         # build/gtr-manager; ./build.sh cross-compiles every platform
+```
+
+Design decisions are in the gtr repository: `docs/adr`.
 
 ---
 
@@ -56,8 +66,9 @@ Every project has a `gtr.json` (schema: `gtr/schema/gtr.schema.json`):
     "engines": { "go": ">=1.22", "gtr": "^0.2" },
     "dependencies": {
         "orm": "github:shibisty/orm.go#^0.1",
-        "orm-mysql": "github:shibisty/orm.go/drivers/mysql#^0.1",
-        "passport": "file:../passport.go"
+        "orm-mysql": "github:shibisty/orm.go-mysql-driver#^0.1",
+        "github.com/google/uuid": "^1.6",
+        "passport": "file:../passport.go/core"
     },
     "devDependencies": {
         "faker": "github:shibisty/faker.go#^0.1"
@@ -71,8 +82,13 @@ Every project has a `gtr.json` (schema: `gtr/schema/gtr.schema.json`):
 ```
 
 The key of a dependency is its **import path** — `import "orm"`, `import "orm/schema"`,
-`import mysql "orm-mysql"` — and the value says where it comes from (ADR-0003). Package
-names are lowercase letters, digits and single hyphens (ADR-0002).
+`import mysql "orm-mysql"`, `import "github.com/google/uuid"` — and the value says where it
+comes from (ADR-0003). Package names are lowercase letters, digits and single hyphens
+(ADR-0002); keys with a dot are external Go modules.
+
+Other fields: `peerDependencies` (packages the application must provide, e.g. the core of
+a driver), `workspaces` (see [Workspaces](#workspaces)), `private`, `description`,
+`license`, `repository`, `"gomod": "commit"`.
 
 Files written by older versions are migrated automatically, with a warning:
 `"github:owner/repo": "*"` becomes `"<name>": "github:owner/repo"`, `"engine"` becomes
@@ -120,6 +136,8 @@ or any `gtr run` script), so the program still sees a terminal.
 Package names that are taken by the Go standard library (`errors`, `log`, …, from
 `go list std` of the active Go) are rejected by `gtr init` and `gtr install`.
 
+### The store
+
 Downloaded packages live once per version in `~/.gtr/store` and are shared by all
 projects; a package directory is never modified after it is stored. Each stored package
 gets a generated `go.mod` (`module <name>`), so published packages don't need one.
@@ -143,10 +161,11 @@ The package name becomes the import path, so it must be a valid name.
 ```bash
 gtr add github:shibisty/orm.go                    # newest tag, saved as "^0.1"
 gtr add github:shibisty/orm.go#^0.1               # a range
-gtr add github:shibisty/orm.go/drivers/mysql      # a package in a monorepo subdirectory
-gtr add file:../passport.go                       # a local package, linked in place
+gtr add github:owner/repo/packages/http           # a package in a monorepo subdirectory
+gtr add file:../passport.go/core                  # a local package, linked in place
 gtr add -D github:shibisty/faker.go               # devDependencies
 gtr add orm=github:shibisty/orm.go                # fail unless the package is named "orm"
+gtr add orm                                       # in a workspace member: another member
 ```
 
 The package name is read from the package's own `gtr.json`; it must match the key
@@ -155,7 +174,9 @@ The package name is read from the package's own `gtr.json`; it must match the ke
 **Versions come from git tags**: `v1.2.3` or `1.2.3` for the repository root;
 `<name>@1.2.3` or `<subdir>/v1.2.3` for a monorepo subdirectory. A repository without
 version tags can still be used with `*`: gtr takes the tip of the default branch and
-pins its commit in `gtr.lock`.
+pins its commit in `gtr.lock` (version `0.0.0-g<commit>`). Such a version satisfies peer
+ranges (`"orm": "^0.1"`), so packages can depend on each other before their first release,
+but not dependency ranges.
 
 ## External Go modules
 
@@ -177,6 +198,11 @@ skipped, `+incompatible` ones used only as a last resort), then applies minimal 
 selection over the modules' own `go.mod` files until nothing changes — the same build
 list the go command computes for the generated `go.mod`. Gtr packages can depend on Go
 modules the same way in their own `gtr.json`.
+
+A range admits newer versions that may need a newer Go: pgx 5.11 needs Go 1.25, for example.
+A library that supports an older Go (ADR-0007: 1.22) pins a patch range such as `"~5.7.1"`
+and tests the minimum Go in CI; the generated `go.mod` gets the highest `go` line of what
+was selected.
 
 | Variable | Meaning |
 |---|---|
@@ -216,7 +242,9 @@ available versions: 0.2.0, 0.1.3, 0.1.0
 ```
 
 `peerDependencies` (a driver needing a core package) are not installed automatically;
-gtr fails with a hint if the project lacks a compatible version.
+gtr fails with a hint if the project lacks a compatible version. A package lists its core
+both as a peer (`"orm": "^0.1"`, what the application must provide) and as a
+devDependency (`"orm": "github:shibisty/orm.go"`, so its own tests build).
 
 If a tag was moved after you locked it (force-pushed to another commit), gtr refuses to
 install until you run `gtr update <name>`. `gtr ci` also re-hashes the stored packages,
@@ -233,11 +261,13 @@ gtr remove orm-mysql
 ```bash
 gtr run                     # the "start" script (or: gtr start)
 gtr run build
-gtr run test -- -run TestLogin -v
+gtr run test -- -run TestLogin -v   # arguments after -- go to the script
+gtr run -r test                     # in every workspace member that has "test"
 ```
 
 A missing script is an error that lists the available ones. The exit code of the script
-is the exit code of `gtr`.
+is the exit code of `gtr`. Scripts run go with gtr's environment (see
+[Running go](#running-go)), so `go test` in a script needs no setup.
 
 ## Workspaces
 
@@ -269,6 +299,54 @@ orm.go/
 
 Patterns are paths or one-level globs (`drivers/*`; `**` is not supported); `"!drivers/old"`
 excludes. `gtr sync` in a workspace only regenerates the files (`--force`).
+
+**Several families side by side.** A dependency of the workspace root overrides the source
+of that name for the whole workspace, so a workspace can use a sibling folder's packages:
+
+```json
+{
+    "name": "passport-dev",
+    "private": true,
+    "workspaces": ["core", "strategies/*", "sessions/*", "example"],
+    "dependencies": {
+        "orm": "file:../orm.go/core",
+        "orm-redis": "file:../orm.go/drivers/redis"
+    }
+}
+```
+
+The directories are shared: a member keeps the `go.mod` its own workspace generated, which
+also works when another workspace uses it as a `file:` package.
+
+---
+
+# Using gtr in CI
+
+Until gtr is released, build gtr-manager from source and install the project with it
+(GitHub Actions; full examples in the `ci.workflow.yml` of the orm, passport, migration and
+faker repositories):
+
+```yaml
+env:
+  GOPROXY: "off"        # go never downloads: dependencies are in gtr_modules
+  GOWORK: "off"
+  GOFLAGS: -mod=mod
+  GTR_GOPROXY: https://proxy.golang.org   # where gtr itself downloads modules
+steps:
+  - uses: actions/checkout@v4
+  - uses: actions/setup-go@v5
+    with: { go-version: stable }
+  - name: gtr
+    shell: bash
+    env: { GOPROXY: "https://proxy.golang.org,direct", GOFLAGS: "" }
+    run: |
+      git clone --depth 1 https://github.com/shibisty/gtr-manager "$RUNNER_TEMP/gtr-manager"
+      (cd "$RUNNER_TEMP/gtr-manager" && go build -o "$RUNNER_TEMP/gtr-bin/gtr$(go env GOEXE)" ./cmd/gtr-manager)
+      echo "$RUNNER_TEMP/gtr-bin" >> "$GITHUB_PATH"
+  - run: gtr ci          # or `gtr install` while there is no gtr.lock
+    env: { GITHUB_TOKEN: "${{ github.token }}" }
+  - run: go test ./...
+```
 
 ---
 
