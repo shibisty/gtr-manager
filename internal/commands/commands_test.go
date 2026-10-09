@@ -330,3 +330,37 @@ func TestWorkspaceCommands(t *testing.T) {
 		t.Fatalf("env in a member: %v\n%s", err, out)
 	}
 }
+
+// run -r in a workspace reached through a symlink (macOS temp directories
+// live under /var → /private/var): the go command must see each member
+// under the same path as go.work.
+func TestRunRecursiveThroughSymlink(t *testing.T) {
+	if _, err := exec.LookPath("go"); err != nil || runtime.GOOS == "windows" {
+		t.Skip("needs go and symlinks")
+	}
+	t.Setenv("GOTOOLCHAIN", "local")
+	t.Setenv("GOFLAGS", "")
+	gh := githubtest.New(t)
+	useGitHub(t, gh)
+	out := project(t, "")
+	link := filepath.Join(t.TempDir(), "link")
+	if err := os.Symlink(t.TempDir(), link); err != nil {
+		t.Skip(err)
+	}
+	t.Chdir(link)
+	for name, body := range map[string]string{
+		"gtr.json":            `{"name":"ws","workspaces":["libs/*"]}`,
+		"libs/alpha/gtr.json": `{"name":"alpha","version":"0.1.0","scripts":{"list":"go list ./..."}}`,
+		"libs/alpha/a.go":     "package alpha\n",
+	} {
+		os.MkdirAll(filepath.Dir(name), 0o755)
+		os.WriteFile(name, []byte(body), 0o644)
+	}
+	if err := Install(nil); err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	out.Reset()
+	if err := Run([]string{"-r", "list"}); err != nil || !strings.Contains(out.String(), "alpha\n") {
+		t.Fatalf("run -r through a symlink: %v\n%s", err, out)
+	}
+}

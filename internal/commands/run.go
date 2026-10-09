@@ -134,6 +134,17 @@ func memberOrder(members map[string]*install.Member) []*install.Member {
 	return out
 }
 
+// withoutKey drops key from an environment list.
+func withoutKey(env []string, key string) []string {
+	out := env[:0:0]
+	for _, kv := range env {
+		if k, _, _ := strings.Cut(kv, "="); k != key {
+			out = append(out, kv)
+		}
+	}
+	return out
+}
+
 // runScript runs command (plus args) in dir.
 func runScript(dir, command string, args []string) error {
 	for _, a := range args {
@@ -149,6 +160,16 @@ func runScript(dir, command string, args []string) error {
 	cmd.Dir = dir
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = Stdin, Stdout, Stderr
 	cmd.Env = os.Environ()
+	if dir != "." {
+		// The go command takes its working directory from $PWD when it names
+		// the directory it runs in, and from the resolved path otherwise. GOWORK
+		// is found by walking up from dir as written, so give the script the
+		// same spelling: with a symlink in the path (macOS /var → /private/var)
+		// the go.work members would otherwise not contain the directory.
+		if abs, err := filepath.Abs(dir); err == nil {
+			cmd.Env = append(withoutKey(cmd.Env, "PWD"), "PWD="+abs)
+		}
+	}
 	if work := goenv.FindWork(dir); work != "" {
 		cmd.Env = goenv.Env(cmd.Env, work) // a workspace member or root (ADR-0009)
 	} else if goenv.Generated(dir) {

@@ -21,6 +21,10 @@
   sibling families can share packages (`"orm": "file:../orm.go/core"`).
 
 ### Fixed
+- `gtr run -r` in a workspace reached through a symlink (macOS temp and home paths under
+  `/var` → `/private/var`): the script gets `PWD` set to the member directory, so the go
+  command sees it under the same path as `go.work` ("directory prefix . does not contain
+  modules listed in go.work").
 - An untagged repository (`0.0.0-g<sha>`) satisfies peer ranges during resolution too,
   as the final peer check already allowed: a strategy with peer `passport ^0.1` installs
   before passport is tagged.

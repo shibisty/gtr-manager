@@ -86,7 +86,10 @@ func TestWorkspaceInstall(t *testing.T) {
 	env := append(os.Environ(), "GOWORK="+filepath.Join(p.dir, "go.work"), "GOPROXY=off", "GOFLAGS=", "GOTOOLCHAIN=local")
 	for _, c := range []struct{ dir, args string }{{".", "run ."}, {"drivers/pg", "test ./..."}, {".", "vet ./..."}} {
 		cmd := exec.Command("go", strings.Fields(c.args)...)
-		cmd.Dir, cmd.Env = filepath.Join(p.dir, c.dir), env
+		// PWD as gtr run sets it: go then sees the directory under the same
+		// path as go.work, symlinks included (macOS temp directories).
+		cmd.Dir = filepath.Join(p.dir, c.dir)
+		cmd.Env = append(env, "PWD="+cmd.Dir)
 		out, err := cmd.CombinedOutput()
 		if err != nil {
 			t.Fatalf("go %s in %s: %v\n%s", c.args, c.dir, err, out)
@@ -244,7 +247,7 @@ func TestWorkspaceEdgeCases(t *testing.T) {
 	}
 	if _, err := exec.LookPath("go"); err == nil {
 		cmd := exec.Command("go", "list", "-m", "all")
-		cmd.Dir, cmd.Env = p.dir, append(os.Environ(), "GOWORK="+filepath.Join(p.dir, "go.work"), "GOPROXY=off", "GOFLAGS=", "GOTOOLCHAIN=local")
+		cmd.Dir, cmd.Env = p.dir, append(os.Environ(), "GOWORK="+filepath.Join(p.dir, "go.work"), "GOPROXY=off", "GOFLAGS=", "GOTOOLCHAIN=local", "PWD="+p.dir)
 		if out, err := cmd.CombinedOutput(); err != nil || !strings.Contains(string(out), "orm-my") {
 			t.Fatalf("go list: %v\n%s", err, out)
 		}
