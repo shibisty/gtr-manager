@@ -1,29 +1,35 @@
 package commands
 
-import "fmt"
+import (
+	"fmt"
+	"io"
+)
 
-func Help(version string) {
-
-    fmt.Printf(`gtr %s
+// Help prints usage information.
+func Help(w io.Writer, version string) {
+	fmt.Fprintf(w, `gtr-manager %s
 
 Usage:
-    gtr <command> [arguments]
+    gtr-manager <command> [arguments]
 
 Commands:
-    new <name>                          Create a new project
-    new <name> --repo <repo>            Create a project from a repository
+    new <name> [-y]                     Create a new project
+    init [name] [-y]                    Initialize the current directory (-y: accept defaults)
 
-    init                                Initialize the current directory
-    init <name>                         Initialize the current directory with the specified project name
+    install / i / add / require <pkg>   Install a package into packages/
+    uninstall / ui / u / remove / rm    Uninstall a package
 
-    install / i / add / require         Install a package to the packages directory
-    uninstall / ui / u / remove / rm    Uninstall a package from the packages directory
-
-    run / start                         Run the "start" script, if it exists
-    run / start <name>                  Run the specified script
+    run / start                         Run the "start" script
+    run / start <name> [-- args...]     Run the specified script with extra arguments
 
     version                             Show the current version
     help                                Show this help message
-`, version)
 
+Packages:
+    github:owner/repo                   Default branch
+    github:owner/repo@1.2.0             Tag v1.2.0 (or 1.2.0)
+    Set GITHUB_TOKEN for private repositories and higher API limits.
+
+Coming later: new --repo, gtr registry packages, version ranges (^1, 1.2).
+`, version)
 }

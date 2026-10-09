@@ -20,6 +20,11 @@ $platforms = @(
     @{ GOOS="darwin";  GOARCH="arm64"; EXT="" }
 )
 
+# GOOS/GOARCH/CGO_ENABLED are restored after the build; otherwise the next
+# go command in the same console would silently build for another platform.
+$saved = @{ GOOS = $env:GOOS; GOARCH = $env:GOARCH; CGO_ENABLED = $env:CGO_ENABLED }
+
+try {
 foreach($p in $platforms){
 
     $env:CGO_ENABLED = "0"
@@ -37,6 +42,14 @@ foreach($p in $platforms){
         "-ldflags=-s -w -X main.Version=$version" `
         -o $file `
         $src
+
+    if ($LASTEXITCODE -ne 0) { throw "go build failed for $($p.GOOS)/$($p.GOARCH)" }
+}
+} finally {
+    foreach ($k in $saved.Keys) {
+        if ($null -eq $saved[$k]) { Remove-Item -Path "env:$k" -ErrorAction SilentlyContinue }
+        else { Set-Item -Path "env:$k" -Value $saved[$k] }
+    }
 }
 
 Write-Host ""

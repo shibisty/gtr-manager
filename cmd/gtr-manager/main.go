@@ -1,53 +1,57 @@
 package main
 
 import (
-    "fmt"
-    "os"
-    "gtr-manager/internal/commands"
+	"errors"
+	"fmt"
+	"io"
+	"os"
+	"os/exec"
+
+	"gtr-manager/internal/commands"
+	"gtr-manager/internal/repositories"
 )
 
+// Version is set at build time: -ldflags "-X main.Version=0.0.1".
 var Version = "dev"
 
 func main() {
+	commands.Sources["github"] = func() (commands.Installer, error) { return repositories.NewGitHub() }
+	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
+}
 
-    if len(os.Args) < 2 {
-        commands.Help(Version)
-        return
-    }
-
-    var err error
-
-    switch os.Args[1] {
-
-    case "new":
-        err = commands.New(os.Args[2:])
-
-    case "init":
-        err = commands.Init(os.Args[2:])
-
-    case "install", "i", "add", "require":
-        err = commands.Install(os.Args[2:])
-
-    case "uninstall", "ui", "u", "remove", "rm":
-        err = commands.Uninstall(os.Args[2:])
-
-    case "run", "start":
-        err = commands.Run(os.Args[2:])
-
-    case "version", "-v", "--version":
-        fmt.Println("gtr-manager", Version)
-
-    case "help", "-h", "--help":
-        commands.Help(Version)
-
-    default:
-        fmt.Printf("Unknown command: %s\n\n", os.Args[1])
-        commands.Help(Version)
-        os.Exit(1)
-    }
-
-    if err != nil {
-        fmt.Fprintln(os.Stderr, "Error:", err)
-        os.Exit(1)
-    }
+func run(args []string, stdout, stderr io.Writer) int {
+	if len(args) == 0 {
+		commands.Help(stdout, Version)
+		return 0
+	}
+	var err error
+	switch args[0] {
+	case "new":
+		err = commands.New(args[1:])
+	case "init":
+		err = commands.Init(args[1:])
+	case "install", "i", "add", "require":
+		err = commands.Install(args[1:])
+	case "uninstall", "ui", "u", "remove", "rm":
+		err = commands.Uninstall(args[1:])
+	case "run", "start":
+		err = commands.Run(args[1:])
+	case "version", "-v", "--version":
+		fmt.Fprintln(stdout, "gtr-manager", Version)
+	case "help", "-h", "--help":
+		commands.Help(stdout, Version)
+	default:
+		fmt.Fprintf(stderr, "Unknown command: %s\n\n", args[0])
+		commands.Help(stderr, Version)
+		return 1
+	}
+	if err == nil {
+		return 0
+	}
+	var exit *exec.ExitError
+	if errors.As(err, &exit) && exit.ExitCode() > 0 {
+		return exit.ExitCode() // the script has already printed its error
+	}
+	fmt.Fprintln(stderr, "Error:", err)
+	return 1
 }

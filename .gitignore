@@ -1,2 +1,3 @@
 build
 win.ps1
+dist/

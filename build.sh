@@ -9,7 +9,7 @@ VERSION="0.0.1"
 
 echo "Cleaning..."
 rm -rf "$OUT"
-mkdir -p "$OUT/$VERSION"
+mkdir -p "$OUT"
 
 platforms=(
     "windows amd64 .exe"
@@ -24,7 +24,7 @@ for platform in "${platforms[@]}"; do
 
     read -r GOOS GOARCH EXT <<<"$platform"
 
-    DIR="$OUT/$VERSION/$GOOS-$GOARCH"
+    DIR="$OUT/$VERSION-$GOOS-$GOARCH"
     FILE="$DIR/$APP$EXT"
 
     mkdir -p "$DIR"
