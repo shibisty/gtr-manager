@@ -8,18 +8,17 @@ import (
 	"os/exec"
 
 	"gtr-manager/internal/commands"
-	"gtr-manager/internal/repositories"
 )
 
 // Version is set at build time: -ldflags "-X main.Version=0.0.1".
 var Version = "dev"
 
 func main() {
-	commands.Sources["github"] = func() (commands.Installer, error) { return repositories.NewGitHub() }
 	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
 }
 
 func run(args []string, stdout, stderr io.Writer) int {
+	commands.Stdout, commands.Stderr = stdout, stderr
 	if len(args) == 0 {
 		commands.Help(stdout, Version)
 		return 0
@@ -30,8 +29,16 @@ func run(args []string, stdout, stderr io.Writer) int {
 		err = commands.New(args[1:])
 	case "init":
 		err = commands.Init(args[1:])
-	case "install", "i", "add", "require":
+	case "install", "i":
 		err = commands.Install(args[1:])
+	case "add", "require":
+		err = commands.Add(args[1:])
+	case "update", "up", "upgrade":
+		err = commands.Update(args[1:])
+	case "ci":
+		err = commands.CI(args[1:])
+	case "sync":
+		err = commands.Sync(args[1:])
 	case "uninstall", "ui", "u", "remove", "rm":
 		err = commands.Uninstall(args[1:])
 	case "run", "start":

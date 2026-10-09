@@ -2,7 +2,6 @@ package commands
 
 import (
 	"bytes"
-	"context"
 	"errors"
 	"os"
 	"os/exec"
@@ -11,9 +10,11 @@ import (
 	"strings"
 	"testing"
 
-	"gtr-manager/internal/dependency"
+	"gtr-manager/internal/home"
+	"gtr-manager/internal/install"
 	"gtr-manager/internal/manifest"
-	"gtr-manager/internal/repositories"
+	"gtr-manager/internal/source"
+	"gtr-manager/internal/source/githubtest"
 )
 
 // project changes into a temporary directory and replaces IO.
@@ -31,26 +32,14 @@ func project(t *testing.T, gtrJSON string) *bytes.Buffer {
 	return out
 }
 
-type fakeSource struct {
-	err  error
-	deps []string
-}
-
-func (f *fakeSource) Install(_ context.Context, d *dependency.Dependency, p string) (string, error) {
-	f.deps = append(f.deps, d.String())
-	if f.err != nil {
-		return "", f.err
+func useGitHub(t *testing.T, gh *githubtest.Server) {
+	old := NewInstaller
+	homeDir := t.TempDir()
+	NewInstaller = func(dir string) (*install.Installer, error) {
+		l := home.Layout{Root: homeDir}
+		return &install.Installer{Dir: dir, Home: l, GitHub: &source.GitHub{API: gh.URL, Client: gh.Client(), Tmp: l.Tmp()}, Log: Stderr}, nil
 	}
-	dir := repositories.PackageDir(p, d)
-	os.MkdirAll(dir, 0o755)
-	os.WriteFile(filepath.Join(dir, "x.go"), []byte("package x"), 0o644)
-	return "main", nil
-}
-
-func useSource(t *testing.T, f *fakeSource) {
-	old := Sources
-	Sources = map[string]func() (Installer, error){"github": func() (Installer, error) { return f, nil }}
-	t.Cleanup(func() { Sources = old })
+	t.Cleanup(func() { NewInstaller = old })
 }
 
 func load(t *testing.T) *manifest.Manifest {
@@ -61,104 +50,53 @@ func load(t *testing.T) *manifest.Manifest {
 	return m
 }
 
-func TestInstallAndUninstall(t *testing.T) {
-	out := project(t, `{"name":"app","license":"MIT"}`)
-	src := &fakeSource{}
-	useSource(t, src)
+func TestPackageCommands(t *testing.T) {
+	gh := githubtest.New(t)
+	gh.Commit("o/strutil.go", map[string]string{"gtr.json": `{"name":"strutil","version":"0"}`, "s.go": "package strutil"}, "v1.0.0")
+	gh.Commit("o/testkit.go", map[string]string{"gtr.json": `{"name":"testkit","version":"0"}`, "t.go": "package testkit"}, "v0.3.0")
+	useGitHub(t, gh)
+	out := project(t, `{"name":"app","version":"1.0.0"}`)
 
-	if err := Install([]string{"github:owner/repo@1.2.0"}); err != nil {
+	if err := Install([]string{"github:o/strutil.go"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := Add([]string{"-D", "github:o/testkit.go"}); err != nil {
 		t.Fatal(err)
 	}
 	m := load(t)
-	if m.Dependencies["github:owner/repo"] != "1.2.0" || string(m.Extra["license"]) != `"MIT"` {
-		t.Fatalf("manifest: %+v", m)
+	if m.Dependencies["strutil"] != "github:o/strutil.go#^1.0.0" || m.DevDependencies["testkit"] != "github:o/testkit.go#^0.3" {
+		t.Fatalf("%v %v", m.Dependencies, m.DevDependencies)
 	}
-	if !strings.Contains(out.String(), "Installed github:owner/repo (main)") {
+	if !strings.Contains(out.String(), "2 packages installed") {
 		t.Fatalf("out: %s", out)
 	}
-	// A repeat install gives a clear error without downloading.
-	err := Install([]string{"github:owner/repo"})
-	if err == nil || !strings.Contains(err.Error(), "already installed (version 1.2.0)") || len(src.deps) != 1 {
-		t.Fatalf("duplicate: %v, %v", err, src.deps)
+	for name, fn := range map[string]func([]string) error{"install": Install, "update": Update, "ci": CI} {
+		if err := fn(nil); err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
 	}
-
-	if err := Uninstall([]string{"github:owner/repo"}); err != nil {
+	if err := Sync(nil); err != nil {
+		t.Fatalf("sync: %v", err)
+	}
+	if err := Sync([]string{"--force"}); err != nil {
 		t.Fatal(err)
 	}
-	if _, ok := load(t).Dependencies["github:owner/repo"]; ok {
-		t.Fatal("dependency not removed")
+	if err := Update([]string{"strutil"}); err != nil {
+		t.Fatal(err)
 	}
-	if _, err := os.Stat("packages"); !os.IsNotExist(err) {
-		t.Fatalf("empty package dirs must be removed: %v", err)
+	if err := Uninstall([]string{"testkit"}); err != nil || load(t).DevDependencies["testkit"] != "" {
+		t.Fatalf("uninstall: %v", err)
 	}
-	if err := Uninstall([]string{"github:owner/repo"}); err == nil || !strings.Contains(err.Error(), "not installed") {
-		t.Fatalf("second uninstall: %v", err)
-	}
-}
-
-func TestInstallFailureKeepsManifest(t *testing.T) {
-	project(t, `{"name":"app"}`)
-	useSource(t, &fakeSource{err: errors.New("network down")})
-	before, _ := os.ReadFile(manifest.FileName)
-	if err := Install([]string{"github:owner/repo"}); err == nil || err.Error() != "network down" {
-		t.Fatalf("got %v", err)
-	}
-	after, _ := os.ReadFile(manifest.FileName)
-	if !bytes.Equal(before, after) {
-		t.Fatal("gtr.json must not change when download fails")
-	}
-}
-
-func TestInstallErrors(t *testing.T) {
-	project(t, `{"name":"app"}`)
-	useSource(t, &fakeSource{})
-	for args, want := range map[string]string{
-		"":                      "package name is required",
-		"orm":                   "gtr packages are not supported yet",
-		"gitlab:a/b":            "gitlab packages are not supported yet",
-		"github:../x":           "invalid github repository",
-		"github:a/b github:c/d": "one package at a time",
+	for name, err := range map[string]error{
+		"install --dev":  Install([]string{"--dev"}),
+		"bad flag":       Add([]string{"--nope"}),
+		"ci args":        CI([]string{"x"}),
+		"sync args":      Sync([]string{"--force", "x"}),
+		"uninstall none": Uninstall(nil),
 	} {
-		var a []string
-		if args != "" {
-			a = strings.Fields(args)
+		if err == nil {
+			t.Errorf("%s must fail", name)
 		}
-		if err := Install(a); err == nil || !strings.Contains(err.Error(), want) {
-			t.Errorf("install %q: %v, want %q", args, err, want)
-		}
-	}
-	if len(load(t).Dependencies) != 0 {
-		t.Fatal("failed installs must not touch gtr.json")
-	}
-	os.Remove(manifest.FileName)
-	if err := Install([]string{"github:a/b"}); err == nil || !strings.Contains(err.Error(), "init") {
-		t.Fatalf("no gtr.json: %v", err)
-	}
-	if err := Uninstall(nil); err == nil {
-		t.Fatal("uninstall without name")
-	}
-	if err := Uninstall([]string{"github:../x"}); err == nil {
-		t.Fatal("uninstall with bad name")
-	}
-}
-
-// uninstall removes only its own directory; sibling packages stay.
-func TestUninstallKeepsNeighbours(t *testing.T) {
-	project(t, `{"name":"app","dependencies":{"github:owner/a":"*","github:owner/b":"*","legacy":"*"}}`)
-	for _, p := range []string{"packages/github/owner/a", "packages/github/owner/b", "packages/legacy"} {
-		os.MkdirAll(p, 0o755)
-	}
-	if err := Uninstall([]string{"github:owner/a"}); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := os.Stat("packages/github/owner/b"); err != nil {
-		t.Fatal("neighbour removed")
-	}
-	if err := Uninstall([]string{"legacy"}); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := os.Stat("packages/legacy"); !os.IsNotExist(err) {
-		t.Fatal("gtr package dir not removed")
 	}
 }
 
@@ -169,11 +107,31 @@ func TestInit(t *testing.T) {
 		t.Fatal(err)
 	}
 	m := load(t)
-	if m.Name != "my-app" || m.Version != "2.0.0" || m.Author != "Ann" || m.Entrypoint != "main.go" || m.Scripts["test"] != "go test ./..." {
+	if m.Name != "my-app" || m.Version != "2.0.0" || string(m.Raw("author")) != `"Ann"` || m.Engines.Go != ">=1.22" ||
+		m.Scripts["test"] != "go test ./..." || m.Raw("homepage") != nil {
 		t.Fatalf("%+v", m)
+	}
+	if gi, _ := os.ReadFile(".gitignore"); string(gi) != "gtr_modules/\ngo.mod\ngo.work\n" {
+		t.Fatalf(".gitignore: %q", gi)
 	}
 	if err := Init(nil); err == nil || !strings.Contains(err.Error(), "already initialized") {
 		t.Fatalf("second init: %v", err)
+	}
+}
+
+func TestInitExistingGoProject(t *testing.T) {
+	out := project(t, "")
+	os.WriteFile("go.mod", []byte("module legacy-app\n\ngo 1.23\n"), 0o644)
+	if err := Init([]string{"-y"}); err != nil {
+		t.Fatal(err)
+	}
+	if load(t).Name != "legacy-app" || !strings.Contains(out.String(), "run `gtr sync`") || strings.Contains(out.String(), "differs") {
+		t.Fatalf("%q %s", load(t).Name, out)
+	}
+	out = project(t, "")
+	os.WriteFile("go.mod", []byte("module github.com/me/app\n"), 0o644)
+	if err := Init([]string{"app", "-y"}); err != nil || !strings.Contains(out.String(), `imports of the project's own packages must use "app/..."`) {
+		t.Fatalf("%v %s", err, out)
 	}
 }
 
@@ -192,6 +150,20 @@ func TestInitYesAndEOF(t *testing.T) {
 	}
 	if m := load(t); m.Name != "only-name" || m.Version != "1.0.0" {
 		t.Fatalf("EOF: %+v", m)
+	}
+	project(t, "")
+	if err := Init([]string{"Bad Name", "-y"}); err == nil || !strings.Contains(err.Error(), "import path") {
+		t.Fatalf("invalid name: %v", err)
+	}
+	t.Setenv("GTR_GO_VERSION", "1.27.2")
+	if err := Init([]string{"-y"}); err != nil || load(t).Engines.Go != ">=1.27" {
+		t.Fatalf("engines from GTR_GO_VERSION: %v %+v", err, load(t).Engines)
+	}
+	if got := suggestName("My Project_2"); got != "my-project-2" {
+		t.Fatalf("suggestName: %q", got)
+	}
+	if suggestName("__") != "app" || suggestName("9lives") != "lives" {
+		t.Fatal("suggestName edge cases")
 	}
 	project(t, "")
 	if err := Init([]string{"--bogus"}); err == nil {
@@ -281,5 +253,80 @@ func TestHelp(t *testing.T) {
 	Help(&b, "1.0")
 	if !strings.Contains(b.String(), "gtr-manager 1.0") || !strings.Contains(b.String(), "GITHUB_TOKEN") {
 		t.Fatal(b.String())
+	}
+}
+
+func TestRunGoEnvAndHints(t *testing.T) {
+	if _, err := exec.LookPath("go"); err != nil {
+		t.Skip("go not in PATH")
+	}
+	t.Setenv("GOTOOLCHAIN", "local")
+	t.Setenv("GOFLAGS", "")
+	out := project(t, `{"name":"app","scripts":{"env":"go env GOPROXY GOWORK GOFLAGS","build":"go build ./..."}}`)
+	os.WriteFile("main.go", []byte("package main\n\nimport \"orm\"\n\nfunc main() { orm.Open() }\n"), 0o644)
+	os.WriteFile("go.mod", []byte("module app\n\ngo 1.22\n"), 0o644)
+	if err := Run([]string{"env"}); err != nil || strings.Contains(out.String(), "off\noff") {
+		t.Fatalf("a foreign go.mod gets no gtr environment: %v\n%s", err, out)
+	}
+	out.Reset()
+	os.WriteFile("go.mod", []byte("// generated by gtr from gtr.json — edit gtr.json or run `gtr sync`\n// gtr:hash sha256:x sem:y\nmodule app\n\ngo 1.22\n"), 0o644)
+	if err := Run([]string{"env"}); err != nil || !strings.Contains(out.String(), "off\noff\n-mod=mod\n") {
+		t.Fatalf("env: %v\n%s", err, out)
+	}
+	out.Reset()
+	if err := Run([]string{"build"}); err == nil || !strings.Contains(out.String(), `gtr: package "orm" is not installed`) {
+		t.Fatalf("hint: %v\n%s", err, out)
+	}
+}
+
+func TestWorkspaceCommands(t *testing.T) {
+	gh := githubtest.New(t)
+	gh.Commit("o/strutil.go", map[string]string{"gtr.json": `{"name":"strutil","version":"0"}`, "s.go": "package strutil"}, "v1.0.0")
+	useGitHub(t, gh)
+	out := project(t, `{"name":"ws","private":true,"workspaces":["libs/*"],"scripts":{"env":"go env GOWORK GOFLAGS"}}`)
+	root, _ := os.Getwd()
+	for dir, body := range map[string]string{
+		"libs/alpha/gtr.json": `{"name":"alpha","version":"0.1.0","scripts":{"hello":"echo hi-alpha"}}`,
+		"libs/beta/gtr.json":  `{"name":"beta","version":"0.1.0","scripts":{"env":"go env GOWORK GOFLAGS","hello":"echo hi-beta"}}`,
+		"libs/aaa/gtr.json":   `{"name":"gamma","version":"0.1.0","dependencies":{"beta":"workspace:*"},"scripts":{"hello":"echo hi-gamma"}}`,
+	} {
+		os.MkdirAll(filepath.Dir(dir), 0o755)
+		os.WriteFile(dir, []byte(body), 0o644)
+	}
+	t.Chdir(filepath.Join(root, "libs", "beta"))
+	if err := Add([]string{"alpha", "github:o/strutil.go"}); err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	if m := load(t); m.Dependencies["alpha"] != "workspace:*" || m.Dependencies["strutil"] == "" {
+		t.Fatalf("member gtr.json: %v", m.Dependencies)
+	}
+	for _, f := range []string{"go.work", "gtr.lock", "gtr_modules/strutil/s.go"} {
+		if _, err := os.Stat(filepath.Join(root, filepath.FromSlash(f))); err != nil {
+			t.Fatalf("%s at the workspace root: %v", f, err)
+		}
+	}
+	if _, err := os.Stat("gtr.lock"); !os.IsNotExist(err) {
+		t.Fatal("a member gets no gtr.lock")
+	}
+	// run -r: every member with the script, dependencies first.
+	out.Reset()
+	if err := Run([]string{"-r", "hello"}); err != nil {
+		t.Fatal(err)
+	}
+	a, b, g := strings.Index(out.String(), "hi-alpha\n"), strings.Index(out.String(), "hi-beta\n"), strings.Index(out.String(), "hi-gamma\n")
+	if a < 0 || b < a || g < b || !strings.Contains(out.String(), "[libs/aaa] > echo hi-gamma") {
+		t.Fatalf("run -r order:\n%s", out)
+	}
+	if err := Run([]string{"-r", "nothing"}); err == nil || !strings.Contains(err.Error(), "no workspace member defines") {
+		t.Fatalf("run -r missing: %v", err)
+	}
+	if _, err := exec.LookPath("go"); err != nil {
+		t.Skip("go not in PATH")
+	}
+	t.Setenv("GOTOOLCHAIN", "local")
+	t.Setenv("GOFLAGS", "")
+	out.Reset()
+	if err := Run([]string{"env"}); err != nil || !strings.Contains(out.String(), filepath.Join(root, "go.work")+"\n\n") {
+		t.Fatalf("env in a member: %v\n%s", err, out)
 	}
 }
