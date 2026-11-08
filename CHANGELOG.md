@@ -2,6 +2,26 @@
 
 ## Unreleased
 
+### Added
+- `gtr build`: the `build` block of gtr.json (entry, output, ldflags with `{{version}}`,
+  `{{commit}}`, `{{date}}`, `{{name}}`, tags, cgo, trimpath, targets, files) into
+  `build/<version>/<os>-<arch>/`; `--all-targets` in parallel; `--archive` writes the
+  release archives and `SHA256SUMS` (ADR-0008, ADR-0010).
+- `gtr dev`: build, run with `.env`, rebuild and restart on changes.
+- `gtr test`: `go test ./...` with `--unit`/`--integration`/`--e2e` build tags,
+  `--coverage` with the `test.coverage` threshold and `--html`, `--watch`, `-r`.
+- `gtr version <patch|minor|major|prerelease|x.y.z>`: bump gtr.json, date CHANGELOG.md,
+  commit and tag (`v1.2.3`, or `<name>@1.2.3` in a subdirectory of the repository).
+- `gtr publish`: checks (name, version, not private, no `file:`/`workspace:` dependencies,
+  clean repository, tag on HEAD, tests, tag not on the remote yet), then pushes branch and tag.
+- `gtr link` / `gtr unlink`: use a local copy of a package without changing gtr.json or
+  gtr.lock (`.gtr/links.json`); `gtr ci` refuses links.
+- `gtr init --ci`: a GitHub Actions workflow running `gtr ci` and `gtr test --coverage`.
+- gtr.json for gtr-manager itself: releases are built with `gtr-manager build --all-targets --archive`.
+
+### Removed
+- `build.sh`, `build.ps1`, `win.ps1`, `release.sh`: `gtr build` and `make build|all|release` replace them.
+
 ### Changed
 - A workspace root without Go code of its own is no longer a module: no `go.mod`, not in
   the `use` of `go.work` (gopls reported its dependencies as "not used in this module").

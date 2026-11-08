@@ -314,9 +314,21 @@ func (in *Installer) Install(ctx context.Context, opts Options) error {
 			gtrRoot[name] = s
 		}
 	}
+	links, err := in.links(members)
+	if err != nil {
+		return err
+	}
+	if opts.Frozen && len(links) > 0 {
+		return fmt.Errorf("gtr ci installs gtr.lock exactly, but linked packages replace it (%s); run `gtr unlink` first", strings.Join(linkNames(links), ", "))
+	}
 	var memberSpecs map[string]spec.Spec
-	if len(members) > 0 {
+	if len(members) > 0 || len(links) > 0 {
 		memberSpecs = map[string]spec.Spec{}
+		// A linked package replaces every source of its name, like a member,
+		// but only when something requires it.
+		for name, dir := range links {
+			memberSpecs[name] = spec.Spec{Kind: spec.File, Path: filepath.ToSlash(dir), Range: "*", Raw: "file:" + filepath.ToSlash(dir)}
+		}
 		for name, mem := range members {
 			memberSpecs[name] = mem.Spec()
 			if _, dep := gtrRoot[name]; !dep {
@@ -392,6 +404,13 @@ func (in *Installer) Install(ctx context.Context, opts Options) error {
 	if err != nil {
 		return err
 	}
+	for _, name := range linkNames(links) {
+		if _, used := newLock.Packages[name]; !used {
+			fmt.Fprintf(in.log(), "warning: %s is linked but nothing requires it\n", name)
+		} else {
+			fmt.Fprintf(in.log(), "Linked %s → %s\n", name, links[name])
+		}
+	}
 	if opts.Frozen {
 		if err := in.verifyStore(nodes, newLock, dirs); err != nil {
 			return err
@@ -438,7 +457,14 @@ func (in *Installer) Install(ctx context.Context, opts Options) error {
 	if err := in.cleanFormerMembers(old.Workspace, members); err != nil {
 		return err
 	}
-	if err := writeIfChanged(lockPath, newLock); err != nil {
+	// A link is personal: the resolution with the local copy (its version,
+	// its dependencies) must not reach the committed gtr.lock, so the lock
+	// stays as it was until gtr unlink.
+	if len(links) > 0 {
+		if _, err := os.Stat(lockPath); err == nil {
+			fmt.Fprintln(in.log(), "gtr.lock is not updated while packages are linked (gtr unlink)")
+		}
+	} else if err := writeIfChanged(lockPath, newLock); err != nil {
 		return err
 	}
 	if err := ensureGitignore(in.Dir, m, len(members) > 0); err != nil {
@@ -901,6 +927,11 @@ func ensureGitignore(dir string, m *manifest.Manifest, workspace bool) error {
 	if workspace {
 		want = append(want, "go.work.sum")
 	}
+	return Gitignore(dir, want...)
+}
+
+// Gitignore adds lines missing from dir/.gitignore.
+func Gitignore(dir string, want ...string) error {
 	path := filepath.Join(dir, ".gitignore")
 	data, err := os.ReadFile(path)
 	if err != nil && !errors.Is(err, os.ErrNotExist) {

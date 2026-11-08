@@ -408,7 +408,9 @@ func TestReviewRegressions(t *testing.T) {
 		p.in.Install(ctx, Options{})
 		os.WriteFile(filepath.Join(p.dir, "gtr_modules", "NOTES.txt"), []byte("mine"), 0o644)
 		mine := t.TempDir()
-		os.Symlink(mine, filepath.Join(p.dir, "gtr_modules", "mylink"))
+		if err := os.Symlink(mine, filepath.Join(p.dir, "gtr_modules", "mylink")); err != nil {
+			t.Skip("symlinks are not available (Windows without Developer Mode):", err)
+		}
 		if err := p.in.Install(ctx, Options{}); err != nil {
 			t.Fatal(err)
 		}

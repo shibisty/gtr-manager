@@ -38,17 +38,19 @@ gtr self unlink gtr           # back to releases
 
 ## Releases
 
-Pushing a tag `v1.2.3` runs `.github/workflows/release.workflow.yml`: tests, then
-`./release.sh v1.2.3` builds
+`gtr version patch && gtr publish` tags `v1.2.3` and pushes it. The tag runs
+`.github/workflows/release.workflow.yml`: tests, then gtr-manager builds itself
+(`gtr-manager build --all-targets --archive`, the `build` block of `gtr.json`):
 `gtr-manager_<version>_<os>_<arch>.zip|tar.gz` for Windows, Linux and macOS
-(amd64, arm64) plus `SHA256SUMS`, and publishes them as a GitHub release. `gtr`
+(amd64, arm64) plus `SHA256SUMS`, published as a GitHub release. `gtr`
 refuses archives that don't match `SHA256SUMS`.
 
 ## Development
 
 ```bash
 go vet ./... && go test ./...      # unit tests; some use the go command and the module cache
-make build                         # build/gtr-manager; ./build.sh cross-compiles every platform
+make build                         # build/<version>/<os>-<arch>/gtr-manager (gtr build)
+make release                       # every platform, archives and SHA256SUMS
 ```
 
 Design decisions are in the gtr repository: `docs/adr`.
@@ -317,6 +319,95 @@ DB_URL="postgres://app@${DB_HOST}/app"   # ${VAR} and \n work in double quotes
 LITERAL='$not_expanded'
 ```
 
+## Build
+
+```bash
+gtr build                       # this platform: build/<version>/<os>-<arch>/<name>
+gtr build -t linux/arm64        # one target (repeat -t, or -t linux/arm64,windows/amd64)
+gtr build --all-targets         # build.targets, or the six platforms gtr is released for
+gtr build --all-targets --archive   # + <name>_<version>_<os>_<arch>.zip|tar.gz and SHA256SUMS
+gtr build --version 1.2.0-rc.1  # instead of the version in gtr.json
+```
+
+The `build` block of `gtr.json` describes the binary:
+
+```json
+"build": {
+    "entry": "./cmd/app",
+    "output": "app",
+    "ldflags": "-s -w -X main.Version={{version}} -X main.Commit={{commit}} -X main.Date={{date}}",
+    "tags": ["netgo"],
+    "targets": ["linux/amd64", "windows/amd64"],
+    "files": ["README.md", "LICENSE", "config.example.yml"]
+}
+```
+
+`{{version}}`, `{{commit}}` (git, 12 characters), `{{date}}` (UTC, RFC 3339;
+`SOURCE_DATE_EPOCH` fixes it) and `{{name}}` are replaced in `ldflags`. Builds use
+`CGO_ENABLED=0` (`"cgo": true` to change) and `-trimpath` (`"trimpath": false`), and run
+targets in parallel. Archives hold the binary at their root plus `files` (default
+`README*`, `LICENSE*`), the layout gtr installs releases from (ADR-0008). In a workspace
+root, `gtr build` builds every member that has a `build` block.
+
+`gtr dev` builds the entry, runs it with the `.env` variables and rebuilds and restarts it
+whenever a Go file, `gtr.json` or `.env` changes, in the package or any workspace member
+(`gtr dev -- --port 8080` passes arguments; a failed build keeps the old process).
+
+## Test
+
+```bash
+gtr test                        # go test ./... (-race when cgo and a C compiler are there)
+gtr test --integration --e2e    # add the build tags integration, e2e (--unit: none)
+gtr test --coverage [--html]    # coverage per package, build/coverage.out (.html)
+gtr test --watch                # again on every change
+gtr test -r                     # every workspace member, dependencies first
+gtr test --run TestLogin -v -- -shuffle=on
+```
+
+```json
+"test": {"coverage": 70, "race": true, "timeout": "5m"}
+```
+
+With `test.coverage`, `gtr test --coverage` fails below that percentage (`--min 80`
+overrides it). `build.tags` apply to tests too.
+
+## Release
+
+```bash
+gtr version                     # orm-mysql 0.1.0
+gtr version patch               # 0.1.0 → 0.1.1 (minor, major, 2.0.0, prerelease --preid rc)
+gtr publish --dry-run           # the checks only
+gtr publish                     # git push --atomic origin <branch> <tag>
+```
+
+`gtr version <bump>` writes the version to `gtr.json`, turns `## Unreleased` of
+`CHANGELOG.md` into `## 0.1.1 — <date>`, commits both and tags the commit: `v0.1.1` for a
+package at the root of its repository, `orm-mysql@0.1.1` for one in a subdirectory (the
+tags `github:owner/repo/sub/dir#^0.1` installs from). The repository must be clean
+(`--no-git` only writes the files, `--no-tag` does not tag). It warns about workspace
+members whose ranges no longer accept the new version.
+
+`gtr publish` checks that `gtr.json` has a name and a version and is not `private`, that
+`dependencies` and `peerDependencies` have no `file:` or `workspace:` sources (nobody else
+could install them), that the repository is clean, that the version tag is on `HEAD`, that
+the tests pass (with the `test.coverage` threshold; `--skip-tests`), and that the remote
+does not have the tag yet; then it pushes the branch and the tag together.
+
+## Link a local copy
+
+```bash
+cd ~/src/orm.go/core && gtr link      # register orm → this directory (~/.gtr/links.json)
+cd ~/src/app && gtr link orm          # use it in this project
+gtr link ../orm.go/core               # or by path, without registering
+gtr link --list
+gtr unlink orm                        # back to gtr.lock (gtr unlink: every link)
+```
+
+A linked package replaces every source of its name, like a workspace member, until
+`gtr unlink`. Links are personal: they are kept in `.gtr/links.json` (added to
+`.gitignore`), and `gtr.json` and `gtr.lock` do not change. `gtr ci` refuses to run with
+links. For packages developed together all the time, a workspace is the better fit.
+
 ## Workspaces
 
 A family of packages developed together (a core and its drivers) is a workspace
@@ -371,9 +462,13 @@ also works when another workspace uses it as a `file:` package.
 
 # Using gtr in CI
 
-Build gtr-manager from source and install the project with it (GitHub Actions; full
-examples in the `ci.workflow.yml` of the orm, passport, migration and faker repositories;
-`gtr init --ci` will generate this in stage 4):
+`gtr init --ci` writes `.github/workflows/ci.yml`: Linux, Windows and macOS × the lowest
+and the newest Go that `engines.go` allows, gtr installed with `install.sh`/`install.ps1`,
+then `gtr ci`, `go vet ./...` and `gtr test --coverage`. (It needs the gtr releases.)
+
+Until then, or without the launcher, build gtr-manager from source and install the project
+with it (full examples in the `ci.workflow.yml` of the orm, passport, migration and faker
+repositories):
 
 ```yaml
 env:

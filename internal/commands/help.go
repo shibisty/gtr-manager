@@ -35,7 +35,31 @@ Scripts:
     run -r <name> [-- args...]       Run it in every workspace member that defines it
     run --no-env <name>              Without the .env files
 
-    version                          Show the version
+Build and test:
+    build [-t os/arch]... [--all-targets] [--archive]
+                                     Build by the "build" block of gtr.json into
+                                     build/<version>/<os>-<arch>/ ({{version}}, {{commit}},
+                                     {{date}} in ldflags); --archive: .zip/.tar.gz + SHA256SUMS
+    dev [-- args...]                 Build, run, and rebuild and restart on changes
+    test [--unit|--integration|--e2e] [--coverage [--html]] [--watch] [-r]
+                                     go test ./... with build tags; the coverage threshold
+                                     is "test": {"coverage": 70} in gtr.json
+
+Releases:
+    version                          The package version (and gtr-manager's)
+    version patch|minor|major|prerelease|<x.y.z> [--preid rc] [--no-git] [--no-tag]
+                                     Bump gtr.json and CHANGELOG.md, commit, tag v<x.y.z>
+                                     (<name>@<x.y.z> in a subdirectory of the repository)
+    publish [--dry-run] [--skip-tests]
+                                     Check (clean, tagged HEAD, tests), push branch and tag
+
+Local development:
+    link                             In a package: register it for gtr link <name>
+    link <name|path>                 In a project: use that local copy (not in gtr.lock)
+    unlink [name] [--global]         Stop using local copies (--global: unregister)
+
+    init --ci                        Add .github/workflows/ci.yml (gtr ci && gtr test --coverage)
+    -v, --version                    Show the gtr-manager version
     help                             Show this help
 
 Sources:

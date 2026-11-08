@@ -49,7 +49,21 @@ func run(args []string, stdout, stderr io.Writer) int {
 		err = commands.Why(args[1:])
 	case "outdated":
 		err = commands.Outdated(args[1:])
-	case "version", "-v", "--version":
+	case "build":
+		err = commands.Build(args[1:])
+	case "test":
+		err = commands.Test(args[1:])
+	case "dev":
+		err = commands.Dev(args[1:])
+	case "version":
+		err = commands.Version(args[1:], Version)
+	case "publish":
+		err = commands.Publish(args[1:])
+	case "link":
+		err = commands.Link(args[1:])
+	case "unlink":
+		err = commands.Unlink(args[1:])
+	case "-v", "--version":
 		fmt.Fprintln(stdout, "gtr-manager", Version)
 	case "help", "-h", "--help":
 		commands.Help(stdout, Version)
@@ -60,6 +74,12 @@ func run(args []string, stdout, stderr io.Writer) int {
 	}
 	if err == nil {
 		return 0
+	}
+	if code, silent := commands.ExitCode(err); silent {
+		return code // already reported (failing tests)
+	} else if code > 1 {
+		fmt.Fprintln(stderr, "Error:", err)
+		return code
 	}
 	var exit *exec.ExitError
 	if errors.As(err, &exit) && exit.ExitCode() > 0 {

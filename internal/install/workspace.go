@@ -335,7 +335,7 @@ func (in *Installer) writeWorkspace(m *manifest.Manifest, rootDeps map[string]sp
 	// dependencies only override sources for the members (a file: path to a
 	// neighbouring family), and a go.mod requiring them would be a module
 	// with nothing to build ("faker is not used in this module" in gopls).
-	rootIsModule, err := hasOwnGo(in.Dir, members)
+	rootIsModule, err := HasOwnGo(in.Dir, members)
 	if err != nil {
 		return err
 	}
@@ -451,10 +451,10 @@ func (in *Installer) writeWorkspace(m *manifest.Manifest, rootDeps map[string]sp
 	return writeIfDifferent(in.path("go.work"), work.Render())
 }
 
-// hasOwnGo reports whether the workspace root has .go files outside its
+// HasOwnGo reports whether the workspace root has .go files outside its
 // members, gtr_modules, hidden directories, testdata and nested projects
 // (directories with their own gtr.json or go.mod).
-func hasOwnGo(root string, members map[string]*Member) (bool, error) {
+func HasOwnGo(root string, members map[string]*Member) (bool, error) {
 	skip := map[string]bool{}
 	for _, dir := range memberDirs(members) {
 		skip[filepath.Clean(filepath.Join(root, filepath.FromSlash(dir)))] = true
