@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+### Changed
+- A workspace root without Go code of its own is no longer a module: no `go.mod`, not in
+  the `use` of `go.work` (gopls reported its dependencies as "not used in this module").
+  A root `go.mod` generated earlier is removed by the next `gtr install` (ADR-0009).
+
+## 0.1.2 — 2026-11-08
+
+### Fixed
+- `v0.0.0-…` pseudo-versions of `gopkg.in/….v1` modules are accepted, as the go command
+  does (`gopkg.in/yaml.v3` requires `gopkg.in/check.v1 v0.0.0-20161208181325-20d25e280405`).
+
+## 0.1.1 — 2026-11-08
+
 ### Added
 - `gtr list [--tree | --depth N] [--json]`, `gtr why <name>` (from `gtr.lock`, no network)
   and `gtr outdated [--all] [--json]` (wanted / latest per package).

@@ -309,3 +309,58 @@ func TestMemberAsFilePackageKeepsGoMod(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// A root without Go code of its own (the family workspaces: orm-dev with a
+// file: override for faker) is not a module: no go.mod, not in go.work's use.
+// When code appears, the next install makes it one; when it goes, the
+// generated go.mod is removed.
+func TestWorkspaceRootWithoutCode(t *testing.T) {
+	p := newWorkspace(t)
+	os.Remove(filepath.Join(p.dir, "main.go"))
+	os.MkdirAll(filepath.Join(p.dir, "docs", "testdata"), 0o755)
+	os.WriteFile(filepath.Join(p.dir, "docs", "testdata", "x.go"), []byte("package x\n"), 0o644) // testdata does not count
+	os.MkdirAll(filepath.Join(p.dir, "other"), 0o755)
+	os.WriteFile(filepath.Join(p.dir, "other", "gtr.json"), []byte(`{"name":"other","version":"0.0.0"}`), 0o644)
+	os.WriteFile(filepath.Join(p.dir, "other", "o.go"), []byte("package other\n"), 0o644) // a nested project does not count
+	if err := p.in.Install(ctx, Options{}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(p.dir, "go.mod")); !os.IsNotExist(err) {
+		t.Fatalf("root without code got a go.mod:\n%s", p.read("go.mod"))
+	}
+	work := p.read("go.work")
+	if !strings.Contains(work, "use (\n\t./core\n\t./drivers/pg\n)") || !strings.Contains(work, "orm-mysql => ./gtr_modules/orm-mysql") {
+		t.Fatalf("go.work:\n%s", work)
+	}
+	if _, err := exec.LookPath("go"); err == nil {
+		cmd := exec.Command("go", "test", "./...")
+		cmd.Dir = filepath.Join(p.dir, "drivers", "pg")
+		cmd.Env = append(os.Environ(), "GOWORK="+filepath.Join(p.dir, "go.work"), "GOPROXY=off", "GOFLAGS=", "GOTOOLCHAIN=local", "PWD="+cmd.Dir)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("go test in a member: %v\n%s", err, out)
+		}
+	}
+
+	os.WriteFile(filepath.Join(p.dir, "tools.go"), []byte("package main\n\nfunc main() {}\n"), 0o644)
+	if err := p.in.Install(ctx, Options{}); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(p.read("go.mod"), "module ws\n") || !strings.Contains(p.read("go.work"), "use (\n\t.\n") {
+		t.Fatalf("root with code:\n%s\n%s", p.read("go.mod"), p.read("go.work"))
+	}
+	os.Remove(filepath.Join(p.dir, "tools.go"))
+	if err := p.in.Install(ctx, Options{}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(p.dir, "go.mod")); !os.IsNotExist(err) || !strings.Contains(p.log.String(), "Removed go.mod of the workspace root") {
+		t.Fatal("the generated root go.mod was not removed")
+	}
+	// A hand-written go.mod is never removed.
+	os.WriteFile(filepath.Join(p.dir, "go.mod"), []byte("module mine\n"), 0o644)
+	if err := p.in.Install(ctx, Options{}); err == nil {
+		t.Fatal("a foreign root go.mod must still be refused")
+	}
+	if p.read("go.mod") != "module mine\n" {
+		t.Fatal("hand-written go.mod changed")
+	}
+}

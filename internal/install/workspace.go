@@ -331,7 +331,18 @@ func (in *Installer) cleanFormerMembers(before []string, members map[string]*Mem
 func (in *Installer) writeWorkspace(m *manifest.Manifest, rootDeps map[string]spec.Spec, nodes map[string]*resolve.Node,
 	mods *gomodules.Result, members map[string]*Member) error {
 	goVer := goDirective(m, nodes, mods)
-	work := gomod.Work{Go: goVer, Use: []string{"."}, Replace: map[string]string{}}
+	// The root is a module only if it has Go code of its own. Otherwise its
+	// dependencies only override sources for the members (a file: path to a
+	// neighbouring family), and a go.mod requiring them would be a module
+	// with nothing to build ("faker is not used in this module" in gopls).
+	rootIsModule, err := hasOwnGo(in.Dir, members)
+	if err != nil {
+		return err
+	}
+	work := gomod.Work{Go: goVer, Replace: map[string]string{}}
+	if rootIsModule {
+		work.Use = append(work.Use, ".")
+	}
 	for _, dir := range memberDirs(members) {
 		work.Use = append(work.Use, "./"+dir)
 	}
@@ -410,12 +421,19 @@ func (in *Installer) writeWorkspace(m *manifest.Manifest, rootDeps map[string]sp
 		}
 		return writeIfDifferent(filepath.Join(dir, "go.mod"), p.Render())
 	}
-	direct := map[string]bool{}
-	for name := range rootDeps {
-		direct[name] = true
-	}
-	if err := module(in.Dir, m.Name, direct); err != nil {
-		return err
+	if rootIsModule {
+		direct := map[string]bool{}
+		for name := range rootDeps {
+			direct[name] = true
+		}
+		if err := module(in.Dir, m.Name, direct); err != nil {
+			return err
+		}
+	} else if st, _ := gomod.Check(in.path("go.mod")); st == gomod.Generated {
+		if err := os.Remove(in.path("go.mod")); err != nil {
+			return err
+		}
+		fmt.Fprintln(in.log(), "Removed go.mod of the workspace root (it has no Go code of its own)")
 	}
 	for _, name := range sortedKeys(members) {
 		n := nodes[name]
@@ -431,6 +449,49 @@ func (in *Installer) writeWorkspace(m *manifest.Manifest, rootDeps map[string]sp
 		}
 	}
 	return writeIfDifferent(in.path("go.work"), work.Render())
+}
+
+// hasOwnGo reports whether the workspace root has .go files outside its
+// members, gtr_modules, hidden directories, testdata and nested projects
+// (directories with their own gtr.json or go.mod).
+func hasOwnGo(root string, members map[string]*Member) (bool, error) {
+	skip := map[string]bool{}
+	for _, dir := range memberDirs(members) {
+		skip[filepath.Clean(filepath.Join(root, filepath.FromSlash(dir)))] = true
+	}
+	found := errors.New("found")
+	err := filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
+		if err != nil {
+			if p == root {
+				return err
+			}
+			return nil // unreadable: not ours to judge
+		}
+		if d.IsDir() {
+			if p == root {
+				return nil
+			}
+			name := d.Name()
+			if skip[filepath.Clean(p)] || name == ModulesDir || name == "testdata" || name == "vendor" ||
+				strings.HasPrefix(name, ".") || strings.HasPrefix(name, "_") {
+				return filepath.SkipDir
+			}
+			for _, f := range []string{manifest.FileName, "go.mod"} {
+				if _, err := os.Stat(filepath.Join(p, f)); err == nil {
+					return filepath.SkipDir
+				}
+			}
+			return nil
+		}
+		if strings.HasSuffix(d.Name(), ".go") && d.Type().IsRegular() {
+			return found
+		}
+		return nil
+	})
+	if err == found {
+		return true, nil
+	}
+	return false, err
 }
 
 func writeIfDifferent(path string, content []byte) error {

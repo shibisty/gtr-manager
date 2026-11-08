@@ -338,8 +338,9 @@ orm.go/
 - **One install for everything.** `gtr install` anywhere in the workspace installs it from
   the root: one `gtr.lock` and one `gtr_modules/` at the root, members' `devDependencies`
   included, one version of each package for all members.
-- **Generated files:** a `go.mod` in the root and in every member, and `go.work` at the root
-  (`use` of every member, the `replace` directives). Go tools and IDEs find `go.work` by
+- **Generated files:** a `go.mod` in every member (and in the root if it has Go code of its
+  own), and `go.work` at the root (`use` of every member, the `replace` directives). A root
+  that only gathers members and overrides sources is not a module. Go tools and IDEs find `go.work` by
   themselves; scripts and the `go` shim run go with `GOWORK` set to it.
 - **Commands in a member:** `gtr add`/`remove` change the member's `gtr.json`;
   `gtr run test` runs the member's script; `gtr run -r test` runs it in every member that
