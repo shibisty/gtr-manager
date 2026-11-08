@@ -16,6 +16,8 @@ func TestHelpers(t *testing.T) {
 		{"github.com/a/b", "v1.2.3", true}, {"github.com/a/b", "v2.0.0", false}, {"github.com/a/b", "v2.0.0+incompatible", true},
 		{"github.com/a/b/v2", "v2.1.0", true}, {"github.com/a/b/v2", "v1.0.0", false}, {"gopkg.in/yaml.v3", "v3.0.1", true},
 		{"gopkg.in/yaml.v3", "v2.0.0", false}, {"github.com/a/b", "1.2.3", false}, {"github.com/a/b", "v0.0.0-20200823014737-9f7001d12a5f", true},
+		{"gopkg.in/check.v1", "v0.0.0-20161208181325-20d25e280405", true}, {"gopkg.in/check.v1", "v1.0.0-20201130134442-10cb98267c6c", true},
+		{"gopkg.in/check.v1", "v0.1.0", false}, {"gopkg.in/yaml.v3", "v0.0.0-20161208181325-20d25e280405", false},
 	} {
 		if ValidVersion(c.path, c.v) != c.ok {
 			t.Errorf("ValidVersion(%s, %s) != %v", c.path, c.v, c.ok)

@@ -67,7 +67,11 @@ func ValidVersion(modPath, v string) bool {
 	pm := PathMajor(modPath)
 	switch {
 	case strings.HasPrefix(modPath, "gopkg.in/"):
-		return major == pm || (pm == 0 && major <= 1)
+		// The go command accepts v0.0.0- pseudo-versions for .v1 paths: old
+		// go versions generated them, and go.mod files still require them
+		// (gopkg.in/yaml.v3 requires gopkg.in/check.v1
+		// v0.0.0-20161208181325-20d25e280405).
+		return major == pm || (pm == 0 && major <= 1) || (pm == 1 && strings.HasPrefix(v, "v0.0.0-"))
 	case pm >= 2:
 		return major == pm && m[5] == ""
 	case m[5] != "": // +incompatible: v2+ without a go.mod, on a path without suffix
