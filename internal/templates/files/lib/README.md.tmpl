@@ -1,0 +1,13 @@
+# {{.Name}}
+
+```bash
+gtr add github:<owner>/<repo>
+```
+
+```go
+import {{.Package}} "{{.Name}}"
+
+{{.Package}}.Hello("gtr")
+```
+
+Publishing a version: tag the repository with `v0.1.0` (gtr reads versions from git tags).

@@ -158,3 +158,32 @@ func TestFile(t *testing.T) {
 		t.Fatal(abs)
 	}
 }
+
+// The GITHUB_TOKEN of a GitHub Actions run (or a fine-grained token) may get
+// 404 for a public repository it was not granted: gtr asks again without it,
+// once per repository.
+func TestTokenScopedToOtherRepositories(t *testing.T) {
+	gh := githubtest.New(t)
+	gh.TokenScoped = true
+	gh.Commit("o/public", map[string]string{"gtr.json": `{"name":"pub","version":"0"}`, "p.go": "package pub"}, "v1.0.0")
+	g := &GitHub{API: gh.URL, Client: gh.Client(), Token: "scoped", Tmp: t.TempDir()}
+	s := mustSpec(t, "github:o/public")
+	cands, err := g.Candidates(ctx, "pub", s)
+	if err != nil || len(cands) != 1 || cands[0].Version != "1.0.0" {
+		t.Fatalf("%+v %v", cands, err)
+	}
+	if _, err := g.Manifest(ctx, s, cands[0]); err != nil {
+		t.Fatal(err)
+	}
+	if err := g.Fetch(ctx, s, cands[0], filepath.Join(t.TempDir(), "pkg")); err != nil {
+		t.Fatal(err)
+	}
+	if gh.Anonymous != 3 {
+		t.Fatalf("%d anonymous requests, want 3 (the token is tried once per repository)", gh.Anonymous)
+	}
+	// A repository nobody can see: the message explains the token's scope.
+	_, err = g.Candidates(ctx, "", mustSpec(t, "github:o/private"))
+	if err == nil || !strings.Contains(err.Error(), "the default GITHUB_TOKEN reads only its own repository") {
+		t.Fatalf("private: %v", err)
+	}
+}

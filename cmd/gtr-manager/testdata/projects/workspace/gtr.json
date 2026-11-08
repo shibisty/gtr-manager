@@ -1,0 +1,5 @@
+{
+    "name": "store-dev",
+    "private": true,
+    "workspaces": ["core", "drivers/*"]
+}

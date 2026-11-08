@@ -1,0 +1,29 @@
+//go:build integration
+
+package {{.Package}}
+
+import (
+	"os"
+	"testing"
+
+	"orm/drivertest"
+)
+
+// TestDriver runs the shared orm driver suite against a real database:
+//
+//	ORM_TEST_{{.EnvName}}_DSN=... gtr run test:integration
+//
+// The suite creates tables through orm/schema, so the Dialect must also
+// implement schema.Dialect (ColumnSQL and friends; see orm-sqlite).
+func TestDriver(t *testing.T) {
+	dsn := os.Getenv("ORM_TEST_{{.EnvName}}_DSN")
+	if dsn == "" {
+		t.Skip("ORM_TEST_{{.EnvName}}_DSN is not set")
+	}
+	conn, err := Open(dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	drivertest.SQL(t, conn)
+}

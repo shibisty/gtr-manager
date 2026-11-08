@@ -15,6 +15,8 @@ import (
 // Add adds packages to gtr.json and installs. Accepted forms:
 //
 //	github:owner/repo[/subdir][#range]   name read from the package's gtr.json
+//	gitlab:group/project[//subdir][#range]
+//	git+https://host/repo.git[//subdir][#range]   (also git+ssh://, git+file://)
 //	file:../path                         a local package
 //	<name>=<source>                      explicit name, e.g. orm=github:shibisty/orm.go
 //
@@ -78,7 +80,7 @@ func (in *Installer) parseAdd(ctx context.Context, arg string) (name, value stri
 		explicit, arg = n, v
 	}
 	switch {
-	case strings.HasPrefix(arg, "github:"), strings.HasPrefix(arg, "file:"):
+	case strings.HasPrefix(arg, "github:"), strings.HasPrefix(arg, "gitlab:"), strings.HasPrefix(arg, "git+"), strings.HasPrefix(arg, "file:"):
 	case spec.IsGoModule(strings.SplitN(arg, "@", 2)[0]):
 		return in.parseAddModule(ctx, arg, explicit)
 	case explicit == "" && in.isMember(arg):
@@ -101,7 +103,7 @@ func (in *Installer) parseAdd(ctx context.Context, arg string) (name, value stri
 	if explicit != "" && explicit != found {
 		return "", "", fmt.Errorf("%s is named %q in its gtr.json, not %q", arg, found, explicit)
 	}
-	if s.Kind == spec.GitHub && s.Range == "*" && !c.Head {
+	if s.IsGit() && s.Range == "*" && !c.Head {
 		v := semver.MustParse(c.Version)
 		s.Range = "^" + v.String()
 		if v.Major == 0 {
@@ -129,7 +131,7 @@ func (in *Installer) parseAddModule(ctx context.Context, arg, explicit string) (
 	if _, err := semver.ParseRange(strings.TrimPrefix(rng, "v")); err != nil {
 		return "", "", fmt.Errorf("%s: invalid version range %q", path, rng)
 	}
-	r := &gomodules.Resolver{Proxies: in.proxies(), SumDB: in.SumDB}
+	r := &gomodules.Resolver{Proxies: in.proxies(), SumDB: in.sumDB()}
 	res, err := r.Resolve(ctx, []gomodules.Requirement{{Path: path, Range: rng, By: "gtr add"}})
 	if err != nil {
 		return "", "", err

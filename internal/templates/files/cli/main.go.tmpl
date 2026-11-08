@@ -1,0 +1,42 @@
+// Command {{.Name}}.
+package main
+
+import (
+	"flag"
+	"fmt"
+	"io"
+	"os"
+)
+
+// version is set at build time: -ldflags "-X main.version=1.2.3".
+var version = "dev"
+
+func main() {
+	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
+}
+
+// run is main without the process: tests call it directly.
+func run(args []string, stdout, stderr io.Writer) int {
+	fs := flag.NewFlagSet("{{.Name}}", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	name := fs.String("name", "world", "who to greet")
+	showVersion := fs.Bool("version", false, "print the version")
+	fs.Usage = func() {
+		fmt.Fprintf(stderr, "Usage: {{.Name}} [flags]\n\nFlags:\n")
+		fs.PrintDefaults()
+	}
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	if *showVersion {
+		fmt.Fprintln(stdout, "{{.Name}}", version)
+		return 0
+	}
+	if fs.NArg() > 0 {
+		fmt.Fprintf(stderr, "unexpected arguments: %v\n", fs.Args())
+		fs.Usage()
+		return 2
+	}
+	fmt.Fprintf(stdout, "Hello, %s!\n", *name)
+	return 0
+}

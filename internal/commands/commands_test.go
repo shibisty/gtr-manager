@@ -364,3 +364,58 @@ func TestRunRecursiveThroughSymlink(t *testing.T) {
 		t.Fatalf("run -r through a symlink: %v\n%s", err, out)
 	}
 }
+
+func TestNewTemplates(t *testing.T) {
+	goBin, err := exec.LookPath("go")
+	if err != nil {
+		t.Skip("go not in PATH")
+	}
+	t.Setenv("GTR_HOME", t.TempDir())
+	for _, tmpl := range []string{"app", "cli", "lib"} {
+		t.Run(tmpl, func(t *testing.T) {
+			project(t, "")
+			if err := New([]string{"my-" + tmpl, "-y", "--template", tmpl}); err != nil {
+				t.Fatal(err)
+			}
+			t.Chdir("my-" + tmpl)
+			m := load(t)
+			if m.Scripts["test"] != "go test ./..." || (tmpl == "lib") != (m.Version == "0.1.0") {
+				t.Fatalf("gtr.json: %+v", m)
+			}
+			if err := Install(nil); err != nil {
+				t.Fatal(err)
+			}
+			cmd := exec.Command(goBin, "test", "./...")
+			cmd.Env = append(os.Environ(), "GOFLAGS=-mod=mod", "GOPROXY=off", "GOWORK=off")
+			if out, err := cmd.CombinedOutput(); err != nil {
+				t.Fatalf("go test: %v\n%s", err, out)
+			}
+		})
+	}
+	project(t, "")
+	if err := New([]string{"bare", "-y", "--template=none"}); err != nil {
+		t.Fatal(err)
+	}
+	if entries, _ := os.ReadDir("bare"); len(entries) != 2 { // gtr.json, .gitignore
+		t.Fatalf("none: %v", entries)
+	}
+	if err := New([]string{"x", "-t", "nope"}); err == nil || !strings.Contains(err.Error(), "orm-driver") {
+		t.Fatalf("unknown template: %v", err)
+	}
+	if _, err := os.Stat("x"); err == nil {
+		t.Fatal("directory created for an unknown template")
+	}
+	if err := New([]string{"x", "--template"}); err == nil {
+		t.Fatal("--template without a value")
+	}
+	if err := New([]string{"drv", "-y", "-t", "orm-driver"}); err != nil {
+		t.Fatal(err)
+	}
+	m, _ := manifest.Load(filepath.Join("drv", manifest.FileName))
+	if m.PeerDependencies["orm"] != "^0.1" || m.DevDependencies["orm"] != "github:shibisty/orm.go" || m.Scripts["test:integration"] == "" {
+		t.Fatalf("orm-driver gtr.json: %+v", m)
+	}
+	if _, err := os.Stat(filepath.Join("drv", "drv.go")); err != nil {
+		t.Fatal("drv.go not written")
+	}
+}

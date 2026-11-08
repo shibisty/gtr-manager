@@ -1,0 +1,9 @@
+{
+    "name": "app",
+    "version": "1.0.0",
+    "engines": { "go": ">=1.22" },
+    "scripts": {
+        "test": "go test ./...",
+        "pretest": "go vet ./..."
+    }
+}

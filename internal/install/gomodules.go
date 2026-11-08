@@ -48,7 +48,7 @@ func (in *Installer) resolveGo(ctx context.Context, goRoot map[string]spec.Spec,
 			locked[p] = v
 		}
 	}
-	r := &gomodules.Resolver{Proxies: in.proxies(), SumDB: in.SumDB, Locked: locked, LockedMods: lockedMods, Update: update}
+	r := &gomodules.Resolver{Proxies: in.proxies(), SumDB: in.sumDB(), Locked: locked, LockedMods: lockedMods, Update: update}
 	return r.Resolve(ctx, reqs)
 }
 
@@ -81,7 +81,7 @@ func (in *Installer) fetchGo(ctx context.Context, mods *gomodules.Result, p stri
 	if err != nil {
 		return "", lock.Entry{}, err
 	}
-	dir, h, err := st.Fetch(ctx, proxy, in.SumDB, p, v, want, goModData)
+	dir, h, err := st.Fetch(ctx, proxy, in.sumDB(), p, v, want, goModData)
 	if err != nil {
 		return "", lock.Entry{}, err
 	}

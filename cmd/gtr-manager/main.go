@@ -43,6 +43,12 @@ func run(args []string, stdout, stderr io.Writer) int {
 		err = commands.Uninstall(args[1:])
 	case "run", "start":
 		err = commands.Run(args[1:])
+	case "list", "ls":
+		err = commands.List(args[1:])
+	case "why":
+		err = commands.Why(args[1:])
+	case "outdated":
+		err = commands.Outdated(args[1:])
 	case "version", "-v", "--version":
 		fmt.Fprintln(stdout, "gtr-manager", Version)
 	case "help", "-h", "--help":

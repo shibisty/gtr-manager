@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+### Added
+- `gtr list [--tree | --depth N] [--json]`, `gtr why <name>` (from `gtr.lock`, no network)
+  and `gtr outdated [--all] [--json]` (wanted / latest per package).
+- `gtr run`: `pre<name>` and `post<name>` hooks; variables from `.env` and `.env.local`
+  (the workspace root's first in a member; the environment wins; `--no-env` skips them);
+  scripts run in the directory of the nearest `gtr.json`.
+- Sources `gitlab:group/project[//subdir]#range` (GitLab REST API, `GTR_GITLAB_URL`,
+  `GTR_GITLAB_TOKEN`) and `git+https://…`, `git+ssh://…`, `git+file://…` (through the
+  `git` command, shallow fetches cached in `~/.gtr/cache/git`).
+- Packages and modules are downloaded in parallel (8 at a time).
+- `--offline` for install, add, update, ci, sync and remove (or `GTR_OFFLINE=1`): only
+  the store and the module cache are used.
+- `gtr new --template <t>` (`-t`): `app` (default), `cli`, `lib`, `orm-driver`, `none`.
+- Fuzz tests of the semver parser; end-to-end tests that run the built gtr-manager on the
+  projects in `cmd/gtr-manager/testdata/projects`.
+
+## 0.1.0 — 2026-10-09
+
 ### Added (stage 4, workspaces — ADR-0009)
 - `"workspaces": ["core", "drivers/*", "!drivers/old"]` in a root `gtr.json`. Members are
   used in place instead of any other source of their name (ranges still checked), so a
@@ -21,6 +39,10 @@
   sibling families can share packages (`"orm": "file:../orm.go/core"`).
 
 ### Fixed
+- A GitHub token that cannot see a repository (the default `GITHUB_TOKEN` of a GitHub
+  Actions run belongs to its own repository) no longer hides public repositories: on 404
+  gtr asks again without the token. When the repository is private, the error says the
+  token needs access (`GITHUB_TOKEN: ${{ secrets.GTR_TOKEN }}`).
 - `gtr run -r` in a workspace reached through a symlink (macOS temp and home paths under
   `/var` → `/private/var`): the script gets `PWD` set to the member directory, so the go
   command sees it under the same path as `go.work` ("directory prefix . does not contain

@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"gtr-manager/internal/dirhash"
 )
@@ -79,6 +80,45 @@ func (s *Store) Put(src, name, version, want string, prepare func(dir string) er
 		return "", "", err
 	}
 	return dir, integrity, nil
+}
+
+// SourcesSuffix names the file next to a package directory (outside the
+// tree, so a package cannot fake it) that lists the sources the tree was
+// downloaded from, one per line ("github:o/r"); offline installs use it to
+// tell packages of the same name apart.
+const SourcesSuffix = ".sources"
+
+// Sources returns the sources recorded for a package directory.
+func Sources(dir string) []string {
+	data, err := os.ReadFile(filepath.Clean(dir) + SourcesSuffix)
+	if err != nil {
+		return nil
+	}
+	var out []string
+	for _, l := range strings.Split(string(data), "\n") {
+		if l = strings.TrimSpace(l); l != "" {
+			out = append(out, l)
+		}
+	}
+	return out
+}
+
+// AddSource records that dir was downloaded from source.
+func AddSource(dir, source string) error {
+	for _, s := range Sources(dir) {
+		if s == source {
+			return nil
+		}
+	}
+	f, err := os.OpenFile(filepath.Clean(dir)+SourcesSuffix, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	if err != nil {
+		return err
+	}
+	_, err = f.WriteString(source + "\n")
+	if cerr := f.Close(); err == nil {
+		err = cerr
+	}
+	return err
 }
 
 // TempDir returns a new empty directory path for a download (not created).

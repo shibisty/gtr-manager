@@ -1,0 +1,11 @@
+package {{.Package}}
+
+import "testing"
+
+func TestHello(t *testing.T) {
+	for in, want := range map[string]string{"": "Hello, world!", "gtr": "Hello, gtr!"} {
+		if got := Hello(in); got != want {
+			t.Errorf("Hello(%q) = %q, want %q", in, got, want)
+		}
+	}
+}

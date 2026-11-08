@@ -42,7 +42,7 @@ Pushing a tag `v1.2.3` runs `.github/workflows/release.workflow.yml`: tests, the
 `./release.sh v1.2.3` builds
 `gtr-manager_<version>_<os>_<arch>.zip|tar.gz` for Windows, Linux and macOS
 (amd64, arm64) plus `SHA256SUMS`, and publishes them as a GitHub release. `gtr`
-refuses archives that don't match `SHA256SUMS`. No release has been published yet.
+refuses archives that don't match `SHA256SUMS`.
 
 ## Development
 
@@ -149,9 +149,18 @@ gets a generated `go.mod` (`module <name>`), so published packages don't need on
 ## Create a project
 
 ```bash
-gtr new project-name        # asks a few questions; -y accepts the defaults
-gtr init [name] [-y]        # in the current directory
+gtr new blog                       # asks a few questions; -y accepts the defaults
+gtr new blog -t cli                # from a template (--template)
+gtr init [name] [-y]               # gtr.json in the current directory
 ```
+
+| Template | What you get |
+|---|---|
+| `app` (default) | `main.go` with a test; scripts `start`, `build`, `test` |
+| `cli` | a command-line tool: flags, `-version` set at build time, a testable `run()` |
+| `lib` | a library package with a test and an example, version 0.1.0 |
+| `orm-driver` | an orm driver on `database/sql`: peer `orm ^0.1`, the shared `orm/drivertest` suite as an integration test |
+| `none` | `gtr.json` and `.gitignore` only |
 
 `init` writes `gtr.json` and adds `gtr_modules/`, `go.mod` and `go.work` to `.gitignore`.
 The package name becomes the import path, so it must be a valid name.
@@ -165,6 +174,8 @@ gtr add github:owner/repo/packages/http           # a package in a monorepo subd
 gtr add file:../passport.go/core                  # a local package, linked in place
 gtr add -D github:shibisty/faker.go               # devDependencies
 gtr add orm=github:shibisty/orm.go                # fail unless the package is named "orm"
+gtr add gitlab:group/project                      # GitLab (GTR_GITLAB_URL for a self-hosted one)
+gtr add git+https://git.example.com/team/lib.git  # any git server (also git+ssh://, git+file://)
 gtr add orm                                       # in a workspace member: another member
 ```
 
@@ -246,6 +257,11 @@ gtr fails with a hint if the project lacks a compatible version. A package lists
 both as a peer (`"orm": "^0.1"`, what the application must provide) and as a
 devDependency (`"orm": "github:shibisty/orm.go"`, so its own tests build).
 
+Downloads run in parallel. `--offline` (or `GTR_OFFLINE=1`) works without the network:
+`gtr install --offline`, `gtr ci --offline`, `gtr add --offline …` use only what the
+store (`~/.gtr/store`) and the module cache already have, in the versions they have, and
+fail with "not available offline" for anything else.
+
 If a tag was moved after you locked it (force-pushed to another commit), gtr refuses to
 install until you run `gtr update <name>`. `gtr ci` also re-hashes the stored packages,
 so a file changed through `gtr_modules/` is caught.
@@ -256,6 +272,25 @@ so a file changed through `gtr_modules/` is caught.
 gtr remove orm-mysql
 ```
 
+## Inspect
+
+```bash
+gtr list                    # direct dependencies (of every member in a workspace)
+gtr list --tree             # everything; --depth 2 for two levels; --json
+gtr why strutil             # which requirements bring it in
+gtr outdated                # newer versions of direct dependencies; --all: of everything
+```
+
+```
+Package        Current  Wanted  Latest  Source
+orm            0.1.3    0.1.5   0.2.0   github:shibisty/orm.go
+faker (dev)    0.1.0    0.1.0   0.2.0   github:shibisty/faker.go
+```
+
+*Wanted* is the newest version all ranges allow — what `gtr update` installs; for *Latest*
+change the range (`gtr add github:shibisty/orm.go#^0.2`). `list` and `why` read
+`gtr.lock` and need no network.
+
 ## Run scripts
 
 ```bash
@@ -265,9 +300,22 @@ gtr run test -- -run TestLogin -v   # arguments after -- go to the script
 gtr run -r test                     # in every workspace member that has "test"
 ```
 
-A missing script is an error that lists the available ones. The exit code of the script
-is the exit code of `gtr`. Scripts run go with gtr's environment (see
+Scripts run in the directory of the nearest `gtr.json`. `pre<name>` and `post<name>` run
+around a script when they are defined (`pretest`, `posttest`); the arguments go to the
+script itself. A missing script is an error that lists the available ones. The exit code
+of the script is the exit code of `gtr`. Scripts run go with gtr's environment (see
 [Running go](#running-go)), so `go test` in a script needs no setup.
+
+Variables from `.env` and `.env.local` (local secrets, not committed) are added to the
+script's environment; variables already set in the environment win. In a workspace
+member the root's files are read first. `gtr run --no-env <name>` skips them.
+
+```
+# .env
+DB_HOST=localhost
+DB_URL="postgres://app@${DB_HOST}/app"   # ${VAR} and \n work in double quotes
+LITERAL='$not_expanded'
+```
 
 ## Workspaces
 
@@ -322,9 +370,9 @@ also works when another workspace uses it as a `file:` package.
 
 # Using gtr in CI
 
-Until gtr is released, build gtr-manager from source and install the project with it
-(GitHub Actions; full examples in the `ci.workflow.yml` of the orm, passport, migration and
-faker repositories):
+Build gtr-manager from source and install the project with it (GitHub Actions; full
+examples in the `ci.workflow.yml` of the orm, passport, migration and faker repositories;
+`gtr init --ci` will generate this in stage 4):
 
 ```yaml
 env:
@@ -355,11 +403,12 @@ steps:
 | Source | Example | Status |
 |---|---|---|
 | GitHub | `github:owner/repo#^0.1`, `github:owner/repo/sub/dir` | Supported |
+| GitLab | `gitlab:group/sub/project#^0.1`, `gitlab:group/project//sub/dir` | Supported |
+| Any git server | `git+https://host/repo.git#^1`, `git+ssh://git@host/repo.git//sub/dir`, `git+file:///srv/git/repo` | Supported (needs `git`) |
 | Local directory | `file:../path` | Supported |
 | External Go modules | `"github.com/go-sql-driver/mysql": "^1.10"` | Supported |
 | Workspace members | `workspace:*`, `workspace:^0.2` | Supported (ADR-0009) |
 | GTR registry | `"orm": "^0.1"` | Stage 6 |
-| GitLab, other git hosts | `gitlab:group/repo` | Later |
 
 For GitHub Enterprise or a mirror set `GTR_GITHUB_API` (and `GTR_GITHUB_TOKEN` for its
 token; `GITHUB_TOKEN` is only ever sent to api.github.com). Private repositories and
@@ -368,6 +417,15 @@ the GitHub API limit (60 requests per hour without a token) need a token:
 ```bash
 export GITHUB_TOKEN=ghp_...        # PowerShell: $env:GITHUB_TOKEN = "ghp_..."
 ```
+
+GitLab: `GTR_GITLAB_URL` (default https://gitlab.com) and `GTR_GITLAB_TOKEN` (or
+`GITLAB_TOKEN` for gitlab.com), sent as `PRIVATE-TOKEN` to that server only. A GitLab
+project path can have subgroups, so a monorepo subdirectory follows `//`.
+
+`git+` sources run the `git` command: `ls-remote` lists the tags, one tag at a time is
+fetched shallowly into `~/.gtr/cache/git`, and `git archive` exports it. Authentication is
+git's own (credential helpers, SSH keys); gtr never waits for a password prompt.
+`git+http://` is refused.
 
 ---
 

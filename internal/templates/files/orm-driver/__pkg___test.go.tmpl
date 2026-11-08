@@ -1,0 +1,20 @@
+package {{.Package}}
+
+import (
+	"strings"
+	"testing"
+
+	"orm"
+)
+
+func TestDialect(t *testing.T) {
+	d := Dialect{}
+	if d.Quote("users") != `"users"` || d.Placeholder(1) != "?" {
+		t.Fatal("quoting or placeholders")
+	}
+	q := orm.NewQuery("users").Where("id", "=", 1)
+	sql, args := d.BuildSelect(q)
+	if !strings.Contains(sql, `FROM "users"`) || len(args) != 1 {
+		t.Fatalf("select: %s %v", sql, args)
+	}
+}

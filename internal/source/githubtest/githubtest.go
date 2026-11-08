@@ -23,6 +23,10 @@ type Server struct {
 	mu      sync.Mutex
 	repos   map[string]*repo
 	Zipball int // number of zipball downloads
+	// TokenScoped makes requests with a token fail with 404, like the
+	// GITHUB_TOKEN of a GitHub Actions run asking about another repository.
+	TokenScoped bool
+	Anonymous   int // requests without a token
 }
 
 type repo struct {
@@ -87,6 +91,12 @@ func (s *Server) MoveTag(fullName, tag string, files map[string]string) {
 func (s *Server) serve(w http.ResponseWriter, req *http.Request) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if req.Header.Get("Authorization") == "" {
+		s.Anonymous++
+	} else if s.TokenScoped {
+		http.NotFound(w, req)
+		return
+	}
 	parts := strings.Split(strings.TrimPrefix(req.URL.Path, "/repos/"), "/")
 	if len(parts) < 2 {
 		http.NotFound(w, req)

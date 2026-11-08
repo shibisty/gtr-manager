@@ -22,6 +22,14 @@ import (
 //
 //	gtr-manager run test -- -run TestX
 //	gtr-manager run -r test       in every workspace member that has "test"
+//	gtr-manager run --no-env dev  without loading .env files
+//
+// The script runs in the directory of the nearest gtr.json. "pre<name>" runs
+// before it and "post<name>" after it when gtr.json defines them (the
+// arguments go to the script itself only). Variables from .env and
+// .env.local in the project directory (in a workspace member: the root's,
+// then the member's) are added to the environment; variables already set
+// win.
 //
 // In a project whose go.mod gtr generated, the go command gets GOPROXY=off,
 // GOWORK=off and -mod=mod (in a workspace: GOWORK=<root>/go.work, see
@@ -30,34 +38,108 @@ import (
 // If the script fails, an *exec.ExitError is returned and main exits with
 // the same code.
 func Run(args []string) error {
-	recursive := false
-	if len(args) > 0 && (args[0] == "-r" || args[0] == "--recursive") {
-		recursive, args = true, args[1:]
+	recursive, dotenv := false, true
+	for len(args) > 0 {
+		switch args[0] {
+		case "-r", "--recursive":
+			recursive = true
+		case "--no-env":
+			dotenv = false
+		default:
+			goto parsed
+		}
+		args = args[1:]
 	}
+parsed:
 	name := "start"
-	if len(args) > 0 {
+	if len(args) > 0 && args[0] != "--" {
 		name, args = args[0], args[1:]
 	}
 	if len(args) > 0 && args[0] == "--" {
 		args = args[1:]
 	}
 	if recursive {
-		return runRecursive(name, args)
+		return runRecursive(name, args, dotenv)
 	}
-	m, err := manifest.Load(manifest.FileName)
+	wd, err := os.Getwd()
 	if err != nil {
 		return err
 	}
-	command := strings.TrimSpace(m.Scripts[name])
-	if command == "" {
-		return fmt.Errorf("script %q is not defined in gtr.json%s", name, available(m.Scripts))
+	dir := findManifestDir(wd)
+	if dir == "" {
+		return fmt.Errorf("no gtr.json in %s or above; create one with `gtr init`", wd)
 	}
-	return runScript(".", command, args)
+	m, err := manifest.Load(filepath.Join(dir, manifest.FileName))
+	if err != nil {
+		return err
+	}
+	if strings.TrimSpace(m.Scripts[name]) == "" {
+		return fmt.Errorf("script %q is not defined in %s%s", name, filepath.Join(dir, manifest.FileName), available(m.Scripts))
+	}
+	var env []string
+	if dotenv {
+		if env, err = loadDotenv(envDirs(dir)...); err != nil {
+			return err
+		}
+	}
+	runDir := dir
+	if runDir == wd {
+		runDir = "."
+	}
+	return runWithHooks(runDir, m.Scripts, name, args, env, "")
+}
+
+// runWithHooks runs pre<name>, name (with args) and post<name>.
+func runWithHooks(dir string, scripts map[string]string, name string, args, env []string, label string) error {
+	for _, step := range []struct {
+		script string
+		args   []string
+	}{{"pre" + name, nil}, {name, args}, {"post" + name, nil}} {
+		command := strings.TrimSpace(scripts[step.script])
+		if command == "" {
+			continue
+		}
+		if label != "" {
+			fmt.Fprintf(Stderr, "[%s] ", label)
+		}
+		if err := runScript(dir, command, step.args, env); err != nil {
+			if step.script != name {
+				return fmt.Errorf("%s: %w", step.script, err)
+			}
+			return err
+		}
+	}
+	return nil
+}
+
+// findManifestDir returns the directory of the nearest gtr.json at or above
+// dir, or "".
+func findManifestDir(dir string) string {
+	for {
+		if st, err := os.Stat(filepath.Join(dir, manifest.FileName)); err == nil && !st.IsDir() {
+			return dir
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return ""
+		}
+		dir = parent
+	}
+}
+
+// envDirs lists the directories whose .env files apply to a script in dir:
+// the workspace root first (if dir is a member), then dir.
+func envDirs(dir string) []string {
+	root, member, err := install.FindRoot(dir)
+	if err != nil || member == "" || filepath.Clean(root) == filepath.Clean(dir) {
+		return []string{dir}
+	}
+	return []string{root, dir}
 }
 
 // runRecursive runs a script in every workspace member that defines it,
 // members before the members that depend on them (ADR-0009, item 6).
-func runRecursive(name string, args []string) error {
+func runRecursive(name string, args []string, dotenv bool) error {
 	wd, err := os.Getwd()
 	if err != nil {
 		return err
@@ -79,12 +161,16 @@ func runRecursive(name string, args []string) error {
 	}
 	ran := 0
 	for _, mem := range memberOrder(members) {
-		command := strings.TrimSpace(mem.Manifest.Scripts[name])
-		if command == "" {
+		if strings.TrimSpace(mem.Manifest.Scripts[name]) == "" {
 			continue
 		}
-		fmt.Fprintf(Stderr, "[%s] ", mem.Dir)
-		if err := runScript(mem.Abs, command, args); err != nil {
+		var env []string
+		if dotenv {
+			if env, err = loadDotenv(root, mem.Abs); err != nil {
+				return err
+			}
+		}
+		if err := runWithHooks(mem.Abs, mem.Manifest.Scripts, name, args, env, mem.Dir); err != nil {
 			return fmt.Errorf("%s: %w", mem.Dir, err)
 		}
 		ran++
@@ -145,21 +231,17 @@ func withoutKey(env []string, key string) []string {
 	return out
 }
 
-// runScript runs command (plus args) in dir.
-func runScript(dir, command string, args []string) error {
+// runScript runs command (plus args) in dir; extra are variables from .env
+// files, added unless the environment already has them.
+func runScript(dir, command string, args, extra []string) error {
 	for _, a := range args {
 		command += " " + quote(a)
 	}
 
-	var cmd *exec.Cmd
-	if runtime.GOOS == "windows" {
-		cmd = exec.Command("cmd", "/C", command)
-	} else {
-		cmd = exec.Command("sh", "-c", command)
-	}
+	cmd := shellCommand(command)
 	cmd.Dir = dir
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = Stdin, Stdout, Stderr
-	cmd.Env = os.Environ()
+	cmd.Env = withDefaults(os.Environ(), extra)
 	if dir != "." {
 		// The go command takes its working directory from $PWD when it names
 		// the directory it runs in, and from the resolved path otherwise. GOWORK

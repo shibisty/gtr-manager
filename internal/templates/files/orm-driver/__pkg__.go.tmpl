@@ -1,0 +1,159 @@
+// Package {{.Package}} is an orm driver on top of database/sql: it
+// implements orm.SQLExecutor and orm.QueryExecutor.
+//
+//	conn, err := orm.New(ctx, {{.Package}}.Driver(dsn))
+//
+// The database/sql driver it opens is SQLDriverName; the application
+// imports it (gtr add <its module>, then a blank import in main).
+package {{.Package}}
+
+import (
+	"context"
+	"database/sql"
+
+	"orm"
+)
+
+// SQLDriverName is the database/sql driver this package opens.
+var SQLDriverName = "{{.Package}}"
+
+// Dialect describes the SQL syntax of the database: identifier quoting and
+// placeholders. The generic builders of orm cover SELECT/INSERT/UPDATE/DELETE.
+type Dialect struct{}
+
+func (Dialect) Name() string                  { return "{{.Package}}" }
+func (Dialect) Quote(identifier string) string { return `"` + identifier + `"` }
+func (Dialect) Placeholder(_ int) string       { return "?" }
+
+func (d Dialect) BuildSelect(q *orm.Query) (string, []any) { return orm.BuildSelectGeneric(d, q) }
+func (d Dialect) BuildInsert(q *orm.Query) (string, []any) { return orm.BuildInsertGeneric(d, q) }
+func (d Dialect) BuildUpdate(q *orm.Query) (string, []any) { return orm.BuildUpdateGeneric(d, q) }
+func (d Dialect) BuildDelete(q *orm.Query) (string, []any) { return orm.BuildDeleteGeneric(d, q) }
+
+// Driver returns the connection factory for orm.New.
+func Driver(dsn string) orm.Driver { return driver{dsn: dsn} }
+
+type driver struct{ dsn string }
+
+func (d driver) Open(ctx context.Context) (orm.Connection, error) {
+	c, err := Open(d.dsn)
+	if err != nil {
+		return nil, err
+	}
+	if err := c.Ping(ctx); err != nil {
+		c.Close()
+		return nil, err
+	}
+	return c, nil
+}
+
+// Conn is a connection.
+type Conn struct {
+	db      *sql.DB
+	dialect Dialect
+	qe      orm.QueryExecutor
+}
+
+// Open opens a connection with SQLDriverName.
+func Open(dsn string) (*Conn, error) {
+	db, err := sql.Open(SQLDriverName, dsn)
+	if err != nil {
+		return nil, err
+	}
+	return wrap(db), nil
+}
+
+func wrap(db *sql.DB) *Conn {
+	c := &Conn{db: db}
+	c.qe = orm.AsQueryExecutor(c)
+	return c
+}
+
+func (c *Conn) Driver() string                 { return "{{.Package}}" }
+func (c *Conn) Dialect() orm.Dialect           { return c.dialect }
+func (c *Conn) Ping(ctx context.Context) error { return c.db.PingContext(ctx) }
+func (c *Conn) Close() error                   { return c.db.Close() }
+
+func (c *Conn) ExecContext(ctx context.Context, query string, args ...any) (orm.Result, error) {
+	return execResult(c.db.ExecContext(ctx, query, args...))
+}
+
+func (c *Conn) QueryContext(ctx context.Context, query string, args ...any) (orm.Rows, error) {
+	return rows(c.db.QueryContext(ctx, query, args...))
+}
+
+// rows avoids returning a nil *sql.Rows inside a non-nil orm.Rows.
+func rows(r *sql.Rows, err error) (orm.Rows, error) {
+	if err != nil {
+		return nil, err
+	}
+	return r, nil
+}
+
+func (c *Conn) QueryRowContext(ctx context.Context, query string, args ...any) orm.Row {
+	return c.db.QueryRowContext(ctx, query, args...)
+}
+
+func (c *Conn) BeginTx(ctx context.Context) (orm.Tx, error) {
+	tx, err := c.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	return &txConn{tx: tx, dialect: c.dialect}, nil
+}
+
+func (c *Conn) Select(ctx context.Context, q *orm.Query, dest any) error {
+	return c.qe.Select(ctx, q, dest)
+}
+func (c *Conn) Insert(ctx context.Context, q *orm.Query) (orm.Result, error) {
+	return c.qe.Insert(ctx, q)
+}
+func (c *Conn) Update(ctx context.Context, q *orm.Query) (orm.Result, error) {
+	return c.qe.Update(ctx, q)
+}
+func (c *Conn) Delete(ctx context.Context, q *orm.Query) (orm.Result, error) {
+	return c.qe.Delete(ctx, q)
+}
+
+var (
+	_ orm.SQLExecutor   = (*Conn)(nil)
+	_ orm.QueryExecutor = (*Conn)(nil)
+)
+
+func execResult(res sql.Result, err error) (orm.Result, error) {
+	if err != nil {
+		return orm.Result{}, err
+	}
+	id, _ := res.LastInsertId() // databases without it (Postgres) need INSERT ... RETURNING
+	affected, _ := res.RowsAffected()
+	return orm.Result{LastInsertID: id, RowsAffected: affected}, nil
+}
+
+// txConn is a transaction.
+type txConn struct {
+	tx      *sql.Tx
+	dialect Dialect
+}
+
+func (t *txConn) Driver() string             { return "{{.Package}}" }
+func (t *txConn) Dialect() orm.Dialect       { return t.dialect }
+func (t *txConn) Ping(context.Context) error { return nil }
+func (t *txConn) Close() error               { return nil }
+func (t *txConn) Commit() error              { return t.tx.Commit() }
+func (t *txConn) Rollback() error            { return t.tx.Rollback() }
+
+func (t *txConn) ExecContext(ctx context.Context, query string, args ...any) (orm.Result, error) {
+	return execResult(t.tx.ExecContext(ctx, query, args...))
+}
+
+func (t *txConn) QueryContext(ctx context.Context, query string, args ...any) (orm.Rows, error) {
+	return rows(t.tx.QueryContext(ctx, query, args...))
+}
+
+func (t *txConn) QueryRowContext(ctx context.Context, query string, args ...any) orm.Row {
+	return t.tx.QueryRowContext(ctx, query, args...)
+}
+
+func (t *txConn) BeginTx(context.Context) (orm.Tx, error) {
+	return nil, sql.ErrTxDone // nested transactions are not supported
+}

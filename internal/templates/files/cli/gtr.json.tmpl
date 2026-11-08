@@ -1,0 +1,7 @@
+{
+    "scripts": {
+        "start": "go run . --",
+        "build": "go build -ldflags \"-X main.version={{.Version}}\" -o build/{{.Name}} .",
+        "test": "go test ./..."
+    }
+}

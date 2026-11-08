@@ -1,0 +1,12 @@
+package {{.Package}}_test
+
+import (
+	"fmt"
+
+	{{.Package}} "{{.Name}}"
+)
+
+func ExampleHello() {
+	fmt.Println({{.Package}}.Hello("gtr"))
+	// Output: Hello, gtr!
+}

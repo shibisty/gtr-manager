@@ -26,7 +26,8 @@ var (
 		if err != nil {
 			return nil, err
 		}
-		return &install.Installer{Dir: dir, Home: l, GitHub: source.NewGitHub(l.Tmp()), SumDB: gomodules.NewSumDB(), Log: Stderr,
+		return &install.Installer{Dir: dir, Home: l, GitHub: source.NewGitHub(l.Tmp()), GitLab: source.NewGitLab(l.Tmp()),
+			Git: source.NewGit(filepath.Join(l.Root, "cache", "git"), l.Tmp()), SumDB: gomodules.NewSumDB(), Log: Stderr,
 			CheckName: CheckName}, nil
 	}
 )
@@ -58,5 +59,8 @@ func installer() (*install.Installer, error) {
 		return nil, err
 	}
 	in.Member = member
+	if v := os.Getenv("GTR_OFFLINE"); v != "" && v != "0" && v != "false" {
+		in.Offline = true
+	}
 	return in, nil
 }

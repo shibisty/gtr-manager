@@ -11,14 +11,11 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
-	"sort"
 	"strings"
 	"sync"
 	"time"
 
-	"gtr-manager/internal/archive"
 	"gtr-manager/internal/manifest"
-	"gtr-manager/internal/semver"
 	"gtr-manager/internal/spec"
 )
 
@@ -37,6 +34,7 @@ type GitHub struct {
 	mu    sync.Mutex
 	tags  map[string][]tag
 	heads map[string]Candidate
+	anon  map[string]bool // repositories the token cannot see but anyone can
 }
 
 type tag struct {
@@ -58,13 +56,35 @@ func NewGitHub(tmp string) *GitHub {
 }
 
 func (g *GitHub) get(ctx context.Context, path, accept, repo string) (*http.Response, error) {
+	g.mu.Lock()
+	anon := g.anon[repo]
+	g.mu.Unlock()
+	resp, err := g.request(ctx, path, accept, repo, g.Token != "" && !anon)
+	if g.Token != "" && !anon && isNotFound(err) {
+		// A token scoped to other repositories (the GITHUB_TOKEN of a GitHub
+		// Actions run, a fine-grained token) may get 404 for a repository
+		// anyone can read. Ask again without it.
+		if r, aerr := g.request(ctx, path, accept, repo, false); aerr == nil {
+			g.mu.Lock()
+			if g.anon == nil {
+				g.anon = map[string]bool{}
+			}
+			g.anon[repo] = true
+			g.mu.Unlock()
+			return r, nil
+		}
+	}
+	return resp, err
+}
+
+func (g *GitHub) request(ctx context.Context, path, accept, repo string, withToken bool) (*http.Response, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(g.API, "/")+path, nil)
 	if err != nil {
 		return nil, err
 	}
 	req.Header.Set("Accept", accept)
 	req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
-	if g.Token != "" {
+	if withToken {
 		req.Header.Set("Authorization", "Bearer "+g.Token)
 	}
 	resp, err := g.Client.Do(req)
@@ -77,7 +97,7 @@ func (g *GitHub) get(ctx context.Context, path, accept, repo string) (*http.Resp
 	defer resp.Body.Close()
 	switch {
 	case resp.StatusCode == http.StatusNotFound:
-		return nil, &notFound{repo: repo, path: path, token: g.Token != ""}
+		return nil, &notFound{repo: repo, path: path, token: withToken}
 	case (resp.StatusCode == http.StatusForbidden || resp.StatusCode == http.StatusTooManyRequests) &&
 		resp.Header.Get("X-RateLimit-Remaining") == "0":
 		return nil, errors.New("github: API rate limit exceeded; set GITHUB_TOKEN to raise it")
@@ -95,9 +115,11 @@ type notFound struct {
 }
 
 func (e *notFound) Error() string {
-	hint := ""
-	if !e.token {
-		hint = " (for a private repository set GITHUB_TOKEN)"
+	hint := " (for a private repository set GITHUB_TOKEN)"
+	if e.token {
+		// Reached only when an anonymous retry failed too.
+		hint = " (private, and the token cannot read it: in GitHub Actions the default GITHUB_TOKEN " +
+			"reads only its own repository; pass a token with access, e.g. GITHUB_TOKEN: ${{ secrets.GTR_TOKEN }})"
 	}
 	return fmt.Sprintf("github: %s not found%s", e.repo, hint)
 }
@@ -178,19 +200,11 @@ func (g *GitHub) Candidates(ctx context.Context, name string, s spec.Spec) ([]Ca
 	if err != nil {
 		return nil, err
 	}
-	seen := map[string]bool{}
-	var out []Candidate
-	for _, t := range tags {
-		v := TagVersion(t.Name, name, s.Subdir)
-		if v == "" || seen[v] {
-			continue
-		}
-		seen[v] = true
-		out = append(out, Candidate{Version: v, Tag: t.Name, Commit: t.Commit.SHA})
+	refs := make([]TagRef, len(tags))
+	for i, t := range tags {
+		refs[i] = TagRef{Name: t.Name, Commit: t.Commit.SHA}
 	}
-	sort.SliceStable(out, func(i, j int) bool {
-		return semver.Compare(semver.MustParse(out[i].Version), semver.MustParse(out[j].Version)) > 0
-	})
+	out := tagCandidates(refs, name, s.Subdir)
 	if len(out) > 0 {
 		return out, nil
 	}
@@ -304,23 +318,5 @@ func (g *GitHub) Fetch(ctx context.Context, s spec.Spec, c Candidate, dst string
 	if err != nil {
 		return fmt.Errorf("github %s: download: %w", s.Repo, err)
 	}
-	tree := filepath.Join(work, "tree")
-	if err := archive.Extract(zipPath, tree); err != nil {
-		return err
-	}
-	entries, err := os.ReadDir(tree)
-	if err != nil {
-		return err
-	}
-	root := tree
-	if len(entries) == 1 && entries[0].IsDir() {
-		root = filepath.Join(tree, entries[0].Name()) // owner-repo-<sha>/
-	}
-	if s.Subdir != "" {
-		root = filepath.Join(root, filepath.FromSlash(s.Subdir))
-		if st, err := os.Stat(root); err != nil || !st.IsDir() {
-			return fmt.Errorf("github:%s at %s has no directory %s", s.Repo, c.Version, s.Subdir)
-		}
-	}
-	return os.Rename(root, dst)
+	return placeArchive(zipPath, work, s.Subdir, dst, "github:"+s.Repo, c.Version)
 }

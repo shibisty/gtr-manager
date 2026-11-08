@@ -1,0 +1,7 @@
+{
+    "name": "store-fast",
+    "version": "0.1.0",
+    "peerDependencies": { "store": "^0.1" },
+    "devDependencies": { "store": "github:o/store.go" },
+    "scripts": { "test": "go test ./..." }
+}

@@ -14,6 +14,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"sync"
 
 	"gtr-manager/internal/gomod"
 	"gtr-manager/internal/gomodules"
@@ -46,14 +47,25 @@ type Installer struct {
 	Member  string
 	Home    home.Layout // ~/.gtr
 	GitHub  source.Provider
+	GitLab  source.Provider    // nil: not configured (tests)
+	Git     source.Provider    // nil: not configured (tests)
 	GoProxy *gomodules.Proxies // external Go modules; nil: from the environment
 	SumDB   *gomodules.SumDB   // checksum database; nil: no checks (tests)
 	Log     io.Writer          // progress and warnings (stderr)
 	// CheckName rejects names taken by the standard library (ADR-0002);
 	// nil skips the check.
 	CheckName func(name string) error
+	// Concurrency is the number of parallel downloads (DefaultConcurrency
+	// if 0).
+	Concurrency int
+	// Offline installs from the store and the module cache only (--offline):
+	// no network, versions limited to what was downloaded before.
+	Offline bool
 
-	ws *workspaceSource // members of the workspace being installed
+	ws      *workspaceSource // members of the workspace being installed
+	offline *storeSource     // gtr packages when Offline
+	logOnce sync.Once
+	logW    io.Writer
 }
 
 // GoDir is the directory of external module links inside gtr_modules.
@@ -63,7 +75,28 @@ func (in *Installer) proxies() *gomodules.Proxies {
 	if in.GoProxy == nil {
 		in.GoProxy = gomodules.NewProxies(filepath.Join(in.Home.Root, "cache", "download", "go"))
 	}
+	if in.Offline {
+		return in.GoProxy.Offline(in.goStore().Root)
+	}
 	return in.GoProxy
+}
+
+// sumDB is the checksum database, or nil offline: what the store and the
+// cache hold was verified when it was downloaded, and gtr.lock pins hashes.
+func (in *Installer) sumDB() *gomodules.SumDB {
+	if in.Offline {
+		return nil
+	}
+	return in.SumDB
+}
+
+// storeSrc serves git packages from the store (--offline).
+func (in *Installer) storeSrc() *storeSource {
+	if in.offline == nil {
+		l, _ := lock.Load(in.path(lock.FileName))
+		in.offline = &storeSource{root: in.store().Root, lock: l}
+	}
+	return in.offline
 }
 
 func (in *Installer) goStore() *gomodules.Store {
@@ -94,10 +127,88 @@ type Options struct {
 }
 
 func (in *Installer) log() io.Writer {
-	if in.Log == nil {
-		return io.Discard
+	in.logOnce.Do(func() {
+		if in.Log == nil {
+			in.logW = io.Discard
+		} else {
+			in.logW = &lockedWriter{w: in.Log}
+		}
+	})
+	return in.logW
+}
+
+// lockedWriter serializes writes from parallel downloads.
+type lockedWriter struct {
+	mu sync.Mutex
+	w  io.Writer
+}
+
+func (l *lockedWriter) Write(p []byte) (int, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.w.Write(p)
+}
+
+// DefaultConcurrency is the number of parallel downloads.
+const DefaultConcurrency = 8
+
+func (in *Installer) concurrency() int {
+	if in.Concurrency > 0 {
+		return in.Concurrency
 	}
-	return in.Log
+	return DefaultConcurrency
+}
+
+// parallel calls fn for every key with at most n calls at a time. After the
+// first failure no new calls start and the context of the running ones is
+// cancelled. The error reported is that of the first key (in keys order)
+// that failed on its own; failures of calls stopped by the cancellation
+// (a killed git, a closed connection) are reported only if nothing else
+// failed.
+func parallel(ctx context.Context, n int, keys []string, fn func(context.Context, string) error) error {
+	if n < 1 {
+		n = 1
+	}
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	errs := make([]error, len(keys))
+	primary := make([]bool, len(keys))
+	var mu sync.Mutex
+	sem := make(chan struct{}, n)
+	var wg sync.WaitGroup
+	for i, k := range keys {
+		if ctx.Err() != nil {
+			break
+		}
+		sem <- struct{}{}
+		wg.Add(1)
+		go func(i int, k string) {
+			defer func() { <-sem; wg.Done() }()
+			if ctx.Err() != nil {
+				return
+			}
+			err := fn(ctx, k)
+			if err == nil {
+				return
+			}
+			mu.Lock()
+			errs[i], primary[i] = err, ctx.Err() == nil
+			mu.Unlock()
+			cancel()
+		}(i, k)
+	}
+	wg.Wait()
+	for i, err := range errs {
+		if primary[i] {
+			return err
+		}
+	}
+	for _, err := range errs {
+		if err != nil {
+			return err
+		}
+	}
+	return ctx.Err()
 }
 
 func (in *Installer) path(name string) string { return filepath.Join(in.Dir, name) }
@@ -111,8 +222,15 @@ func (in *Installer) file() *source.File { return &source.File{ProjectDir: in.Di
 // Providers returns the provider for a kind of source.
 func (in *Installer) Providers(k spec.Kind) (source.Provider, error) {
 	switch k {
-	case spec.GitHub:
-		return in.GitHub, nil
+	case spec.GitHub, spec.GitLab, spec.Git:
+		if in.Offline {
+			return in.storeSrc(), nil
+		}
+		p := map[spec.Kind]source.Provider{spec.GitHub: in.GitHub, spec.GitLab: in.GitLab, spec.Git: in.Git}[k]
+		if p == nil {
+			return nil, fmt.Errorf("%s sources are not configured", k)
+		}
+		return p, nil
 	case spec.File:
 		return in.file(), nil
 	case spec.Registry:
@@ -180,6 +298,9 @@ func (in *Installer) Install(ctx context.Context, opts Options) error {
 	if err != nil {
 		return err
 	}
+	if in.Offline {
+		in.offline = &storeSource{root: in.store().Root, lock: old}
+	}
 	if opts.Frozen {
 		if _, err := os.Stat(lockPath); err != nil {
 			return errors.New("gtr ci needs gtr.lock; run `gtr install` and commit gtr.lock")
@@ -237,24 +358,39 @@ func (in *Installer) Install(ctx context.Context, opts Options) error {
 			fmt.Fprintf(in.log(), "warning: %s is not installed\n", name)
 		}
 	}
+	// Downloads run in parallel; results are collected by name, and the
+	// first error in name order is reported, so the outcome does not depend
+	// on timing.
+	var mu sync.Mutex
 	dirs := map[string]string{}
-	for _, name := range sortedNames(installed(nodes)) {
-		n := nodes[name]
-		dir, entry, err := in.materialize(ctx, n, old.Packages[name])
+	err = parallel(ctx, in.concurrency(), sortedNames(installed(nodes)), func(ctx context.Context, name string) error {
+		dir, entry, err := in.materialize(ctx, nodes[name], old.Packages[name])
 		if err != nil {
 			return err
 		}
+		mu.Lock()
 		dirs[name] = dir
 		newLock.Packages[name] = entry
+		mu.Unlock()
+		return nil
+	})
+	if err != nil {
+		return err
 	}
 	goDirs := map[string]string{}
-	for _, p := range sortedKeys(mods.Versions) {
+	err = parallel(ctx, in.concurrency(), sortedKeys(mods.Versions), func(ctx context.Context, p string) error {
 		dir, entry, err := in.fetchGo(ctx, mods, p, old.Packages[p], opts.Update)
 		if err != nil {
 			return err
 		}
+		mu.Lock()
 		goDirs[p] = dir
 		newLock.Packages[p] = entry
+		mu.Unlock()
+		return nil
+	})
+	if err != nil {
+		return err
 	}
 	if opts.Frozen {
 		if err := in.verifyStore(nodes, newLock, dirs); err != nil {
@@ -451,7 +587,11 @@ func (in *Installer) materialize(ctx context.Context, n *resolve.Node, prev lock
 	same := prev.Version == entry.Version && prev.Commit == entry.Commit && prev.Integrity != ""
 	if same && st.Has(n.Name, entry.Version, prev.Integrity) {
 		entry.Integrity = prev.Integrity
-		return st.Dir(n.Name, entry.Version, prev.Integrity), entry, nil
+		dir := st.Dir(n.Name, entry.Version, prev.Integrity)
+		if !in.Offline && prev.Source == entry.Source {
+			store.AddSource(dir, entry.Source) // stores filled before sources were recorded
+		}
+		return dir, entry, nil
 	}
 	tmp, err := st.TempDir()
 	if err != nil {
@@ -475,6 +615,12 @@ func (in *Installer) materialize(ctx context.Context, n *resolve.Node, prev lock
 	})
 	if err != nil {
 		return "", entry, err
+	}
+	if !in.Offline {
+		// Offline installs pick store directories by source, never just by name.
+		if err := store.AddSource(dir, entry.Source); err != nil {
+			return "", entry, err
+		}
 	}
 	entry.Integrity = integrity
 	return dir, entry, nil

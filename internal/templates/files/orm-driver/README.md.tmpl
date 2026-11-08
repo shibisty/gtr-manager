@@ -1,0 +1,27 @@
+# {{.Name}}
+
+An [orm](https://github.com/shibisty/orm.go) driver.
+
+```bash
+gtr add github:<owner>/<repo>
+```
+
+```go
+import (
+	"orm"
+	{{.Package}} "{{.Name}}"
+)
+
+conn, err := orm.New(ctx, {{.Package}}.Driver(dsn))
+```
+
+Development:
+
+```bash
+gtr install                                   # orm comes from devDependencies
+gtr run test
+ORM_TEST_{{.EnvName}}_DSN=... gtr run test:integration   # the shared orm/drivertest suite
+```
+
+orm is a peer dependency (`^0.1`): the application chooses the orm version,
+and every driver uses the same one.

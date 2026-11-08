@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 )
@@ -24,6 +25,93 @@ type Proxy struct {
 	URL    string
 	Client *http.Client
 	Cache  string // directory for verified .mod files ("" = no cache)
+	// Offline answers from Cache and Store only (gtr install --offline).
+	Offline bool
+	Store   string // the module store (~/.gtr/store/go), read when Offline
+}
+
+// ErrOffline means a module version is neither in the cache nor in the
+// store, and the proxy is offline.
+var ErrOffline = errors.New("not available offline")
+
+// Offline returns copies of the proxies that never use the network.
+func (ps *Proxies) Offline(store string) *Proxies {
+	off := func(p *Proxy) *Proxy {
+		if p == nil {
+			return nil
+		}
+		c := *p
+		c.Offline, c.Store = true, store
+		return &c
+	}
+	out := *ps
+	out.Public, out.Private = off(ps.Public), off(ps.Private)
+	if out.Public == nil && ps.PublicErr != nil {
+		// GOPROXY=off and friends do not matter offline.
+		out.Public = &Proxy{Cache: ps.cacheDir(), Offline: true, Store: store}
+		out.PublicErr = nil
+	}
+	if out.Private == nil {
+		out.Private = &Proxy{Cache: ps.cacheDir(), Offline: true, Store: store}
+	}
+	return &out
+}
+
+func (ps *Proxies) cacheDir() string {
+	if ps.Cache != "" {
+		return ps.Cache
+	}
+	if ps.Private != nil {
+		return ps.Private.Cache
+	}
+	return ""
+}
+
+// offlineVersions lists the versions of a module that the store has
+// (extracted trees): only those can be installed offline. The .mod cache
+// holds more (every go.mod MVS read), but without their code.
+func (p *Proxy) offlineVersions(modPath string) ([]string, error) {
+	ep, err := Escape(modPath)
+	if err != nil {
+		return nil, err
+	}
+	seen := map[string]bool{}
+	var out []string
+	add := func(dir, suffix string) {
+		if dir == "" {
+			return
+		}
+		matches, _ := filepath.Glob(filepath.Join(dir, filepath.FromSlash(ep)) + "@*" + suffix)
+		for _, m := range matches {
+			base := filepath.Base(m)
+			v := unescapeVersion(strings.TrimSuffix(base[strings.LastIndex(base, "@")+1:], suffix))
+			if suffix == "" {
+				if st, err := os.Stat(m); err != nil || !st.IsDir() {
+					continue
+				}
+			}
+			if ValidVersion(modPath, v) && !seen[v] {
+				seen[v] = true
+				out = append(out, v)
+			}
+		}
+	}
+	add(p.Store, "")
+	return out, nil
+}
+
+// unescapeVersion undoes the module path escaping of a version ("!v" → "V").
+func unescapeVersion(s string) string {
+	var b strings.Builder
+	for i := 0; i < len(s); i++ {
+		if s[i] == '!' && i+1 < len(s) {
+			i++
+			b.WriteByte(s[i] - 'a' + 'A')
+			continue
+		}
+		b.WriteByte(s[i])
+	}
+	return b.String()
 }
 
 // ProxyURL picks the public proxy: GTR_GOPROXY, else the first http(s)
@@ -54,11 +142,12 @@ type Proxies struct {
 	// PrivatePatterns are GONOPROXY/GOPRIVATE globs.
 	PrivatePatterns []string
 	PublicErr       error
+	Cache           string // the .mod cache directory (for Offline)
 }
 
 // NewProxies configures proxies from the environment.
 func NewProxies(cache string) *Proxies {
-	ps := &Proxies{PrivatePatterns: patterns(os.Getenv("GONOPROXY"), os.Getenv("GOPRIVATE"))}
+	ps := &Proxies{PrivatePatterns: patterns(os.Getenv("GONOPROXY"), os.Getenv("GOPRIVATE")), Cache: cache}
 	if url, err := ProxyURL(); err != nil {
 		ps.PublicErr = err
 	} else {
@@ -105,6 +194,9 @@ func NewProxy(url, cache string) *Proxy {
 }
 
 func (p *Proxy) get(ctx context.Context, modPath, suffix string) (*http.Response, error) {
+	if p.Offline {
+		return nil, fmt.Errorf("%s (%s): %w; run the command once with the network", modPath, suffix, ErrOffline)
+	}
 	ep, err := Escape(modPath)
 	if err != nil {
 		return nil, err
@@ -130,6 +222,9 @@ func (p *Proxy) get(ctx context.Context, modPath, suffix string) (*http.Response
 
 // List returns the tagged versions of a module (unsorted, as served).
 func (p *Proxy) List(ctx context.Context, modPath string) ([]string, error) {
+	if p.Offline {
+		return p.offlineVersions(modPath)
+	}
 	resp, err := p.get(ctx, modPath, "@v/list")
 	if err != nil {
 		return nil, err
@@ -151,6 +246,17 @@ func (p *Proxy) List(ctx context.Context, modPath string) ([]string, error) {
 // Latest returns the version @latest resolves to (may be a pseudo-version
 // for modules without tags).
 func (p *Proxy) Latest(ctx context.Context, modPath string) (string, error) {
+	if p.Offline {
+		vs, err := p.offlineVersions(modPath)
+		if err != nil {
+			return "", err
+		}
+		if len(vs) == 0 {
+			return "", fmt.Errorf("%s: %w", modPath, ErrOffline)
+		}
+		sort.Slice(vs, func(i, j int) bool { return Compare(vs[i], vs[j]) > 0 })
+		return vs[0], nil
+	}
 	resp, err := p.get(ctx, modPath, "@latest")
 	if err != nil {
 		return "", err
@@ -186,6 +292,18 @@ func (p *Proxy) Mod(ctx context.Context, modPath, version string, verify func([]
 				return nil, fmt.Errorf("%w (cached file %s)", err, c)
 			}
 			return data, nil
+		}
+	}
+	if p.Offline && p.Store != "" {
+		// The store has the module's go.mod (or the one gtr wrote for a
+		// module without one, which is what the proxy serves).
+		if dir, err := DirName(modPath, version); err == nil {
+			if data, err := os.ReadFile(filepath.Join(p.Store, filepath.FromSlash(dir), "go.mod")); err == nil {
+				if err := verify(data); err != nil {
+					return nil, err
+				}
+				return data, nil
+			}
 		}
 	}
 	ev, err := Escape(version)

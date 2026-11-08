@@ -22,6 +22,8 @@ type Kind string
 
 const (
 	GitHub    Kind = "github"
+	GitLab    Kind = "gitlab" // GitLab REST API (gitlab.com or GTR_GITLAB_URL)
+	Git       Kind = "git"    // any git server through the git command
 	File      Kind = "file"
 	Registry  Kind = "registry"  // gtr registry, stage 6
 	GoModule  Kind = "go"        // proxy.golang.org, step 3.2
@@ -31,7 +33,8 @@ const (
 // Spec is a parsed dependency value.
 type Spec struct {
 	Kind   Kind
-	Repo   string // GitHub "owner/repo"
+	Repo   string // GitHub "owner/repo"; GitLab project path "group/sub/project"
+	URL    string // git: the repository URL without "git+" ("https://host/x.git")
 	Subdir string // monorepo subdirectory, slash-separated, "" for the root
 	Path   string // file: path as written
 	Range  string // version range ("*" if none)
@@ -43,6 +46,7 @@ var (
 	goModuleRe = regexp.MustCompile(`^[a-z0-9-]+(\.[a-z0-9-]+)+(/[A-Za-z0-9._~-]+)*$`)
 	repoRe     = regexp.MustCompile(`^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})/[A-Za-z0-9._-]{1,100}$`)
 	subdirRe   = regexp.MustCompile(`^[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)*$`)
+	gitlabRe   = regexp.MustCompile(`^[A-Za-z0-9_.][A-Za-z0-9_.-]*(/[A-Za-z0-9_.][A-Za-z0-9_.-]*)+$`)
 )
 
 // reserved names (ADR-0002, item 5); the standard library is checked
@@ -128,8 +132,52 @@ func Parse(key, value string) (Spec, error) {
 				return s, fmt.Errorf("%s: invalid subdirectory %q", key, parts[2])
 			}
 		}
-	case strings.HasPrefix(value, "gitlab:"), strings.HasPrefix(value, "git+"):
-		return s, fmt.Errorf("%s: %s sources are not supported yet; use github: or file:", key, strings.SplitN(value, ":", 2)[0])
+	case strings.HasPrefix(value, "gitlab:"):
+		// gitlab:group[/subgroup...]/project[//subdir][#range]: a GitLab
+		// project path may have any depth, so a subdirectory follows "//".
+		s.Kind = GitLab
+		loc, rng, hasRange := strings.Cut(strings.TrimPrefix(value, "gitlab:"), "#")
+		if hasRange {
+			s.Range = strings.TrimSpace(rng)
+		}
+		project, sub, _ := strings.Cut(loc, "//")
+		if !gitlabRe.MatchString(project) || strings.Contains("/"+project+"/", "/../") || strings.Contains("/"+project+"/", "/./") {
+			return s, fmt.Errorf("%s: invalid GitLab source %q, expected gitlab:group/project[//subdir][#range]", key, value)
+		}
+		s.Repo = project
+		if err := s.setSubdir(key, sub); err != nil {
+			return s, err
+		}
+	case strings.HasPrefix(value, "git+"):
+		// git+https://host/path/repo.git[//subdir][#range], also git+ssh://
+		// and git+file:// (a local repository).
+		s.Kind = Git
+		loc, rng, hasRange := strings.Cut(strings.TrimPrefix(value, "git+"), "#")
+		if hasRange {
+			s.Range = strings.TrimSpace(rng)
+		}
+		scheme, rest, ok := strings.Cut(loc, "://")
+		switch {
+		case !ok || rest == "":
+			return s, fmt.Errorf("%s: invalid git source %q, expected git+https://host/repo.git[//subdir][#range]", key, value)
+		case scheme == "http":
+			return s, fmt.Errorf("%s: %q: plain http is not allowed for git sources; use git+https://", key, value)
+		case scheme != "https" && scheme != "ssh" && scheme != "file":
+			return s, fmt.Errorf("%s: %q: unsupported scheme %q (git+https, git+ssh or git+file)", key, value, scheme)
+		}
+		repoPath, sub, _ := strings.Cut(rest, "//")
+		if scheme == "file" && strings.HasPrefix(rest, "/") {
+			// file:///abs/path: the path starts after the third slash
+			repoPath, sub, _ = strings.Cut(rest[1:], "//")
+			repoPath = "/" + repoPath
+		}
+		if strings.ContainsAny(repoPath, " \t\n") || repoPath == "" || repoPath == "/" {
+			return s, fmt.Errorf("%s: invalid git source %q", key, value)
+		}
+		s.URL = scheme + "://" + strings.TrimRight(repoPath, "/")
+		if err := s.setSubdir(key, sub); err != nil {
+			return s, err
+		}
 	default:
 		s.Range = value
 		s.Kind = Registry
@@ -142,6 +190,21 @@ func Parse(key, value string) (Spec, error) {
 	}
 	return s, nil
 }
+
+func (s *Spec) setSubdir(key, sub string) error {
+	sub = strings.Trim(sub, "/")
+	if sub == "" {
+		return nil
+	}
+	if !subdirRe.MatchString(sub) || strings.Contains("/"+sub+"/", "/../") || strings.Contains("/"+sub+"/", "/./") {
+		return fmt.Errorf("%s: invalid subdirectory %q", key, sub)
+	}
+	s.Subdir = sub
+	return nil
+}
+
+// IsGit reports whether the source is a git repository (versions are tags).
+func (s Spec) IsGit() bool { return s.Kind == GitHub || s.Kind == GitLab || s.Kind == Git }
 
 // String formats a spec back into a gtr.json value.
 func (s Spec) String() string {
@@ -156,10 +219,24 @@ func (s Spec) String() string {
 			return "workspace:*"
 		}
 		return "workspace:" + s.Range
-	case GitHub:
-		v := "github:" + s.Repo
-		if s.Subdir != "" {
-			v += "/" + s.Subdir
+	case GitHub, GitLab, Git:
+		var v string
+		switch s.Kind {
+		case GitHub:
+			v = "github:" + s.Repo
+			if s.Subdir != "" {
+				v += "/" + s.Subdir
+			}
+		case GitLab:
+			v = "gitlab:" + s.Repo
+			if s.Subdir != "" {
+				v += "//" + s.Subdir
+			}
+		default:
+			v = "git+" + s.URL
+			if s.Subdir != "" {
+				v += "//" + s.Subdir
+			}
 		}
 		if s.Range != "" && s.Range != "*" {
 			v += "#" + s.Range
@@ -173,5 +250,5 @@ func (s Spec) String() string {
 // SameSource reports whether two specs point at the same place, ignoring
 // the version range.
 func (s Spec) SameSource(o Spec) bool {
-	return s.Kind == o.Kind && s.Repo == o.Repo && s.Subdir == o.Subdir && s.Path == o.Path
+	return s.Kind == o.Kind && s.Repo == o.Repo && s.URL == o.URL && s.Subdir == o.Subdir && s.Path == o.Path
 }

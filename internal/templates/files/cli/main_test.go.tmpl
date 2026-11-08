@@ -1,0 +1,25 @@
+package main
+
+import (
+	"bytes"
+	"testing"
+)
+
+func TestRun(t *testing.T) {
+	for _, tc := range []struct {
+		args []string
+		code int
+		out  string
+	}{
+		{nil, 0, "Hello, world!\n"},
+		{[]string{"-name", "gtr"}, 0, "Hello, gtr!\n"},
+		{[]string{"-version"}, 0, "{{.Name}} dev\n"},
+		{[]string{"extra"}, 2, ""},
+		{[]string{"-nope"}, 2, ""},
+	} {
+		var out, errOut bytes.Buffer
+		if code := run(tc.args, &out, &errOut); code != tc.code || out.String() != tc.out {
+			t.Errorf("%v: code %d, out %q (stderr %q)", tc.args, code, out.String(), errOut.String())
+		}
+	}
+}
