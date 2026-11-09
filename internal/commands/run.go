@@ -253,9 +253,12 @@ func runScript(dir, command string, args, extra []string) error {
 		}
 	}
 	if work := goenv.FindWork(dir); work != "" {
+		warnStaleWork(dir, work)
 		cmd.Env = goenv.Env(cmd.Env, work) // a workspace member or root (ADR-0009)
 	} else if goenv.Generated(dir) {
 		cmd.Env = goenv.Env(cmd.Env, "")
+	} else {
+		warnNotInstalled(dir)
 	}
 	// Explain go errors in gtr terms, unless stderr is a terminal: a script
 	// may run a program that behaves differently when it is not.

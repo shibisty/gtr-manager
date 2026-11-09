@@ -28,9 +28,12 @@ func goCommand(ctx context.Context, dir string, extra []string, args ...string) 
 		cmd.Env = append(withoutKey(cmd.Env, "PWD"), "PWD="+abs) // see runScript
 	}
 	if work := goenv.FindWork(dir); work != "" {
+		warnStaleWork(dir, work)
 		cmd.Env = goenv.Env(cmd.Env, work)
 	} else if goenv.Generated(dir) {
 		cmd.Env = goenv.Env(cmd.Env, "")
+	} else {
+		warnNotInstalled(dir)
 	}
 	for _, kv := range extra {
 		k, _, _ := strings.Cut(kv, "=")
@@ -209,4 +212,76 @@ func relPaths(base string, paths []string) string {
 		out = append(out, filepath.ToSlash(p))
 	}
 	return strings.Join(out, ", ")
+}
+
+// warnStaleWork tells when the package in dir has a gtr.json but is not in
+// go.work: a workspace member added since the last `gtr install`, which go
+// would reject with "directory prefix . does not contain modules listed in
+// go.work".
+func warnStaleWork(dir, work string) {
+	abs, err := filepath.Abs(dir)
+	if err != nil {
+		return
+	}
+	pkg := findManifestDir(abs)
+	root := filepath.Dir(work)
+	if pkg == "" || pkg == root || !strings.HasPrefix(pkg, root+string(filepath.Separator)) {
+		return
+	}
+	data, err := os.ReadFile(work)
+	if err != nil {
+		return
+	}
+	for _, use := range workUses(string(data)) {
+		if filepath.Clean(filepath.Join(root, filepath.FromSlash(use))) == pkg {
+			return
+		}
+	}
+	rel, _ := filepath.Rel(root, pkg)
+	fmt.Fprintf(Stderr, "gtr: %s is not in go.work (a new workspace member?); run `gtr install` in %s\n", filepath.ToSlash(rel), root)
+}
+
+// workUses lists the directories of the use directives of a go.work.
+func workUses(text string) []string {
+	var out []string
+	inBlock := false
+	for _, line := range strings.Split(text, "\n") {
+		line = strings.TrimSpace(line)
+		if i := strings.Index(line, "//"); i >= 0 {
+			line = strings.TrimSpace(line[:i])
+		}
+		switch {
+		case inBlock && line == ")":
+			inBlock = false
+		case inBlock && line != "":
+			out = append(out, strings.Trim(line, `"`))
+		case line == "use (":
+			inBlock = true
+		case strings.HasPrefix(line, "use "):
+			out = append(out, strings.Trim(strings.TrimSpace(line[4:]), `"`))
+		}
+	}
+	return out
+}
+
+// warnNotInstalled tells when a gtr package has neither a go.mod nor a
+// go.work above it: `gtr install` has not run yet, and go would fail with
+// "go.mod file not found".
+func warnNotInstalled(dir string) {
+	abs, err := filepath.Abs(dir)
+	if err != nil {
+		return
+	}
+	pkg := findManifestDir(abs)
+	if pkg == "" {
+		return
+	}
+	if _, err := os.Stat(filepath.Join(pkg, "go.mod")); err == nil {
+		return // a go.mod of its own (committed, or not made by gtr)
+	}
+	where := pkg
+	if root, member, err := install.FindRoot(pkg); err == nil && member != "" {
+		where = root
+	}
+	fmt.Fprintf(Stderr, "gtr: dependencies are not installed (no go.mod or go.work); run `gtr install` in %s\n", where)
 }

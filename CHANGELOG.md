@@ -3,6 +3,24 @@
 ## Unreleased
 
 ### Added
+- `gtr run`, `gtr build`, `gtr test` and `gtr dev` warn when the package is not in `go.work`
+  (a workspace member added since the last `gtr install`) instead of leaving only go's
+  "directory prefix . does not contain modules listed in go.work".
+- They also say `run gtr install` when a package has neither a go.mod nor a go.work yet,
+  before go fails with "go.mod file not found".
+- `gtr version <current version>` makes the first release of a package whose version was
+  never tagged (it started at 0.1.0): the CHANGELOG "## Unreleased" becomes that version and
+  the commit is tagged, instead of "version 0.1.0 is not higher than the current 0.1.0".
+
+### Fixed
+- `gtr publish` sets the branch upstream on the first push, so a later plain `git push`
+  no longer fails with "The current branch master has no upstream branch".
+
+## 0.1.4 — 2026-11-08
+
+(0.1.3 was tagged on the same changes.)
+
+### Added
 - `gtr build`: the `build` block of gtr.json (entry, output, ldflags with `{{version}}`,
   `{{commit}}`, `{{date}}`, `{{name}}`, tags, cgo, trimpath, targets, files) into
   `build/<version>/<os>-<arch>/`; `--all-targets` in parallel; `--archive` writes the

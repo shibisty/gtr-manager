@@ -129,6 +129,10 @@ func Publish(args []string) error {
 
 	push := []string{"push", "--atomic", remote}
 	if branch, err := git(repo.top, "symbolic-ref", "-q", "--short", "HEAD"); err == nil && branch != "" {
+		// A first push also sets the upstream, so a plain `git push` works afterwards.
+		if _, err := git(repo.top, "rev-parse", "-q", "--verify", branch+"@{upstream}"); err != nil {
+			push = append(push[:2:2], append([]string{"--set-upstream"}, push[2:]...)...)
+		}
 		push = append(push, branch)
 	}
 	push = append(push, "refs/tags/"+tag)

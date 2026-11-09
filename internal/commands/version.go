@@ -183,10 +183,18 @@ func releaseChangelog(dir, version string, date time.Time) (bool, error) {
 	return true, manifest.WriteFileAtomic(path, out)
 }
 
+// isExplicit reports whether how is a version, not patch, minor, ….
+func isExplicit(how string) bool {
+	_, err := semver.Parse(strings.TrimPrefix(how, "v"))
+	return err == nil
+}
+
 // Version prints or changes the package version:
 //
 //	gtr version              the package and gtr-manager versions
 //	gtr version patch        1.2.3 → 1.2.4 (also minor, major, a version)
+//	gtr version 0.1.0        the current version, when it has no tag yet:
+//	                         the first release of a package
 //	gtr version prerelease   1.2.4 → 1.2.5-rc.0 → 1.2.5-rc.1 (--preid beta)
 //
 // A change writes gtr.json, turns "## Unreleased" in CHANGELOG.md into the
@@ -249,9 +257,17 @@ func Version(args []string, toolVersion string) error {
 	if err != nil {
 		return err
 	}
+	// first: the explicit current version, never tagged yet (the first
+	// release of a package that started at 0.1.0): tag it as is.
+	first := false
 	if p.M.Version != "" {
-		if cur, err := semver.Parse(p.M.Version); err == nil && semver.Compare(semver.MustParse(next), cur) <= 0 {
-			return fmt.Errorf("version %s is not higher than the current %s", next, p.M.Version)
+		if cur, err := semver.Parse(p.M.Version); err == nil {
+			switch c := semver.Compare(semver.MustParse(next), cur); {
+			case c == 0 && isExplicit(how) && !noGit && !noTag:
+				first = true
+			case c <= 0:
+				return fmt.Errorf("version %s is not higher than the current %s", next, p.M.Version)
+			}
 		}
 	}
 	var repo gitRepo
@@ -269,6 +285,9 @@ func Version(args []string, toolVersion string) error {
 		if !noTag {
 			tag := repo.tagName(p.M.Name, next)
 			if _, err := git(repo.top, "rev-parse", "-q", "--verify", "refs/tags/"+tag); err == nil {
+				if first {
+					return fmt.Errorf("version %s is already tagged (%s); bump it with `gtr version patch`", next, tag)
+				}
 				return fmt.Errorf("tag %s already exists", tag)
 			}
 		}
@@ -297,8 +316,12 @@ func Version(args []string, toolVersion string) error {
 	if _, err := git(p.Dir, append([]string{"add", "--"}, files...)...); err != nil {
 		return err
 	}
-	if _, err := git(p.Dir, append([]string{"commit", "-q", "-m", message, "--"}, files...)...); err != nil {
-		return err
+	// A first release may have nothing to commit (gtr.json unchanged, no
+	// "## Unreleased" in CHANGELOG.md): then only the tag is made.
+	if _, err := git(p.Dir, append([]string{"diff", "--cached", "--quiet", "--"}, files...)...); err != nil || !first {
+		if _, err := git(p.Dir, append([]string{"commit", "-q", "-m", message, "--"}, files...)...); err != nil {
+			return err
+		}
 	}
 	if noTag {
 		fmt.Fprintf(Stdout, "committed %q\n", message)

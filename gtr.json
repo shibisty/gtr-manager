@@ -1,7 +1,7 @@
 {
     "$schema": "https://raw.githubusercontent.com/shibisty/gtr/main/schema/gtr.schema.json",
     "name": "gtr-manager",
-    "version": "0.1.2",
+    "version": "0.1.4",
     "description": "The package manager of gtr: gtr.json, gtr.lock, gtr_modules/",
     "engines": {
         "go": ">=1.26.5"
