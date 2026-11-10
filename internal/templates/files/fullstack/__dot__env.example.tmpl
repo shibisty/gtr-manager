@@ -1,0 +1,14 @@
+APP_NAME={{.Name}}
+APP_ENV=local
+APP_DEBUG=true
+APP_URL=http://localhost:8080
+HTTP_ADDR=:8080
+LOG_LEVEL=debug
+
+DB_DRIVER=sqlite
+DATABASE_DSN=storage/database.sqlite
+# Run pending migrations at start (handy locally; use `go run . migrate` in production).
+DB_MIGRATE=true
+
+# API tokens (POST /api/token): a random string of at least 32 characters.
+# AUTH_JWT_SECRET=

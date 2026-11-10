@@ -1,0 +1,24 @@
+// Package seeders fills the database (go run . db:seed).
+package seeders
+
+import (
+	"context"
+	"errors"
+
+	"fullstack"
+
+	"{{.Name}}/app/users"
+)
+
+// Users creates the demo account demo@example.com / password.
+func Users(ctx context.Context, app *fullstack.App) error {
+	svc, err := fullstack.Make[*users.Service](app)
+	if err != nil {
+		return err
+	}
+	_, err = svc.Register(ctx, "Demo", "demo@example.com", "password")
+	if errors.Is(err, users.ErrEmailTaken) {
+		return nil // seeded before
+	}
+	return err
+}

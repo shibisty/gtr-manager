@@ -13,7 +13,7 @@ Usage:
     gtr <command> [arguments]        (gtr forwards these commands to gtr-manager)
 
 Project:
-    new <name> [-y] [-t <template>]  Create a project (templates: app, cli, lib, orm-driver, none)
+    new <name> [-y] [-t <template>]  Create a project (templates: app, cli, fullstack, lib, orm-driver, none)
     init [name] [-y]                 Create gtr.json in the current directory
 
 Packages:
@@ -50,8 +50,18 @@ Releases:
     version patch|minor|major|prerelease|<x.y.z> [--preid rc] [--no-git] [--no-tag]
                                      Bump gtr.json and CHANGELOG.md, commit, tag v<x.y.z>
                                      (<name>@<x.y.z> in a subdirectory of the repository)
-    publish [--dry-run] [--skip-tests]
-                                     Check (clean, tagged HEAD, tests), push branch and tag
+    publish [--dry-run] [--skip-tests] [--registry <url> | --git]
+                                     Check (clean, tests) and upload to the registry when
+                                     logged in; --git: push the branch and the version tag
+
+Registry:
+    login [--registry <url>]         Log in (email and password, or --token) and use it
+    logout / whoami                  Forget the token / show who it belongs to
+    search <query>                   Find packages
+    info <name>                      A package: description, owners, versions
+    yank <name>@<version> [--undo]   Hide a version from new installs (locked ones stay)
+    owner <name> | add|remove <name> <email>
+                                     Who may publish a package
 
 Local development:
     link                             In a package: register it for gtr link <name>
@@ -63,6 +73,7 @@ Local development:
     help                             Show this help
 
 Sources:
+    orm  (gtr add orm[@^0.2])        The gtr registry: "orm": "^0.2" (GTR_REGISTRY, gtr login)
     github:owner/repo                Newest tag (saved as ^<version>); untagged: default branch
     github:owner/repo#^0.2           A range of tags: v0.2.x
     github:owner/repo/sub/dir#^0.1   A package in a monorepo subdirectory
@@ -78,6 +89,8 @@ in place instead of any other source; commands in a member act on the whole work
 Packages are linked into gtr_modules/ from ~/.gtr/store; go.mod is generated.
 Scripts run go with GOPROXY=off, GOWORK=off and -mod=mod; go errors get gtr hints.
 GITHUB_TOKEN: private repositories and higher API limits.
+The registry: GTR_REGISTRY (default: the one of gtr login, else http://localhost:4873),
+GTR_REGISTRY_TOKEN for CI; tokens are kept in ~/.gtr/registry.json.
 --offline (install, add, update, ci, sync, remove) or GTR_OFFLINE=1: only what the store has.
 `, version)
 }

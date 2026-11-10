@@ -3,6 +3,15 @@
 ## Unreleased
 
 ### Added
+- The gtr registry: `"greet": "^0.1"` (or `gtr add greet`) installs from it: versions and their
+  gtr.json from the package index, archives checked against their SHA-256, `registry:<url>` and
+  the checksum in gtr.lock, yanked versions skipped unless locked, `--offline` from the store.
+  `gtr login` (email and password, or `--token`; `~/.gtr/registry.json`, apart from the launcher's `config.json`), `logout`, `whoami`,
+  `search`, `info`, `yank [--undo]`/`unyank`, `owner [add|remove]`. `GTR_REGISTRY` (default
+  `http://localhost:4873`) and `GTR_REGISTRY_TOKEN`.
+- `gtr publish` uploads to the registry when logged in (`--registry <url>`): the files git does
+  not ignore, without generated and build files, as a `.tar.gz` (`--dry-run` lists them,
+  `--allow-dirty`); `--git` keeps pushing the version tag.
 - `gtr run`, `gtr build`, `gtr test` and `gtr dev` warn when the package is not in `go.work`
   (a workspace member added since the last `gtr install`) instead of leaving only go's
   "directory prefix . does not contain modules listed in go.work".
@@ -11,6 +20,21 @@
 - `gtr version <current version>` makes the first release of a package whose version was
   never tagged (it started at 0.1.0): the CHANGELOG "## Unreleased" becomes that version and
   the commit is tagged, instead of "version 0.1.0 is not higher than the current 0.1.0".
+- `gtr new --template fullstack`: a web application on the fullstack framework (SQLite, users,
+  login and registration, migrations, seeders, views, HTTP tests). Template files without the
+  `.tmpl` suffix are copied as they are (HTML views keep their `{{...}}`); `__dot__` in a template
+  file name becomes `.` (`.env.example`, `.gitignore`).
+
+- `gtr run <name>` without such a script runs the gtr command of that name for `test`, `build`,
+  `dev`, `install` and `ci` (`gtr run test` → `gtr test`), with a note, instead of an error.
+- A script can be run by its name alone (`gtr migrate` → `gtr run migrate`) when it is not a gtr
+  command; mistyped commands and scripts get a "did you mean" suggestion.
+
+- npm packages for the frontend: `"preact": "npm:^10.19"` in gtr.json (or `gtr add npm:preact`)
+  installs from registry.npmjs.org (`GTR_NPM_REGISTRY`, `GTR_NPM_TOKEN`) into `node_modules/`, without
+  npm: npm range rules, npm-style hoisting with nested versions, integrity checks, a store in
+  `~/.gtr/store/npm`, the `npm` section of gtr.lock (`gtr ci` installs it exactly; `--offline` works
+  from the store). Install scripts never run. gtr packages may declare `npm:` dependencies.
 
 ### Fixed
 - `gtr publish` sets the branch upstream on the first push, so a later plain `git push`

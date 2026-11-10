@@ -3,8 +3,9 @@
 //	"orm":       "github:shibisty/orm.go#^0.1"           GitHub, versions from tags
 //	"orm-mysql": "github:shibisty/orm.go/drivers/mysql#^0.1"  monorepo subdirectory
 //	"passport":  "file:../passport.go"                  local directory, not copied
-//	"faker":     "^0.1"                                 the gtr registry (stage 6)
+//	"faker":     "^0.1"                                 the gtr registry
 //	"github.com/go-sql-driver/mysql": "^1.10"           an external Go module
+//	"preact":    "npm:^10.19"                           an npm package for the frontend (node_modules)
 //
 // The key is always the import path.
 package spec
@@ -14,6 +15,7 @@ import (
 	"regexp"
 	"strings"
 
+	"gtr-manager/internal/npm"
 	"gtr-manager/internal/semver"
 )
 
@@ -25,9 +27,10 @@ const (
 	GitLab    Kind = "gitlab" // GitLab REST API (gitlab.com or GTR_GITLAB_URL)
 	Git       Kind = "git"    // any git server through the git command
 	File      Kind = "file"
-	Registry  Kind = "registry"  // gtr registry, stage 6
+	Registry  Kind = "registry"  // the gtr registry (GTR_REGISTRY)
 	GoModule  Kind = "go"        // proxy.golang.org, step 3.2
 	Workspace Kind = "workspace" // a workspace member (ADR-0009)
+	NPM       Kind = "npm"       // the npm registry: node_modules, not go.mod
 )
 
 // Spec is a parsed dependency value.
@@ -85,6 +88,16 @@ func ValidateName(name string) error {
 	return nil
 }
 
+// ValidateDep checks the key of a dependency with its value: npm packages
+// ("npm:...") have npm names ("@preact/signals"), the others are import
+// paths.
+func ValidateDep(key, value string) error {
+	if strings.HasPrefix(strings.TrimSpace(value), "npm:") {
+		return npm.ValidName(key)
+	}
+	return ValidateKey(key)
+}
+
 // IsLegacyKey reports a key in the pre-ADR-0003 format ("github:owner/repo").
 func IsLegacyKey(key string) bool {
 	return strings.HasPrefix(key, "github:") || strings.HasPrefix(key, "gitlab:") || strings.HasPrefix(key, "bitbucket:")
@@ -107,6 +120,15 @@ func Parse(key, value string) (Spec, error) {
 		}
 		if _, err := semver.ParseRange(s.Range); err != nil {
 			return s, fmt.Errorf("%s: invalid version range in %q", key, value)
+		}
+		return s, nil
+	case strings.HasPrefix(value, "npm:"):
+		s.Kind = NPM
+		if rng := strings.TrimSpace(strings.TrimPrefix(value, "npm:")); rng != "" {
+			s.Range = rng
+		}
+		if _, err := npm.ParseRange(s.Range); err != nil {
+			return s, fmt.Errorf("%s: invalid npm version range in %q", key, value)
 		}
 		return s, nil
 	case strings.HasPrefix(value, "file:"):
@@ -211,6 +233,11 @@ func (s Spec) String() string {
 	switch s.Kind {
 	case File:
 		return "file:" + s.Path
+	case NPM:
+		if s.Range == "*" {
+			return "npm:*"
+		}
+		return "npm:" + s.Range
 	case Workspace:
 		if s.Raw != "" {
 			return s.Raw

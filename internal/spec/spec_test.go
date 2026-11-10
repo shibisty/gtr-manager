@@ -68,3 +68,19 @@ func TestKeys(t *testing.T) {
 		t.Fatal("git SameSource/IsGit")
 	}
 }
+
+func TestNPM(t *testing.T) {
+	s, err := Parse("preact", "npm:^10.19")
+	if err != nil || s.Kind != NPM || s.Range != "^10.19" || s.String() != "npm:^10.19" {
+		t.Fatal(s, err)
+	}
+	if s, _ := Parse("preact", "npm:"); s.Range != "*" || s.String() != "npm:*" {
+		t.Fatal(s)
+	}
+	if _, err := Parse("preact", "npm:>=one"); err == nil {
+		t.Fatal("bad range")
+	}
+	if ValidateDep("@preact/signals", "npm:^1") != nil || ValidateDep("@preact/signals", "^1") == nil || ValidateDep("orm", "github:a/b") != nil {
+		t.Fatal("ValidateDep")
+	}
+}

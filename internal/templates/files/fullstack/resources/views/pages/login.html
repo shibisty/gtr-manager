@@ -1,0 +1,17 @@
+{{define "title"}}Log in · {{.App}}{{end}}
+{{define "content"}}
+<h1>Log in</h1>
+<form class="card" method="post" action="/login{{with .Redirect}}?redirect={{.}}{{end}}">
+  {{.CSRFField}}
+  <label>Email
+    <input name="email" type="email" value="{{.Email}}" required autofocus>
+    {{with .Errors}}{{template "error" index . "email"}}{{end}}
+  </label>
+  <label>Password
+    <input name="password" type="password" required>
+    {{with .Errors}}{{template "error" index . "password"}}{{end}}
+  </label>
+  <button>Log in</button>
+</form>
+<p>No account? <a href="/register">Register</a>.</p>
+{{end}}

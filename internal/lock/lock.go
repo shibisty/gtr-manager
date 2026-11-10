@@ -22,6 +22,9 @@ type Lock struct {
 	// workspace (ADR-0009), so files generated for former members can be
 	// cleaned up.
 	Workspace []string `json:"workspace,omitempty"`
+	// NPM are the npm packages, by their path in node_modules
+	// ("node_modules/preact", "node_modules/a/node_modules/b").
+	NPM map[string]Entry `json:"npm,omitempty"`
 }
 
 // Entry is one resolved package.
@@ -30,8 +33,10 @@ type Entry struct {
 	Source       string            `json:"source"`
 	Commit       string            `json:"commit,omitempty"`
 	Integrity    string            `json:"integrity,omitempty"`
-	GoMod        string            `json:"goMod,omitempty"` // h1 of an external module's go.mod
+	GoMod        string            `json:"goMod,omitempty"`   // h1 of an external module's go.mod
+	Tarball      string            `json:"tarball,omitempty"` // npm: the package's tarball URL
 	Dependencies map[string]string `json:"dependencies,omitempty"`
+	Optional     []string          `json:"optional,omitempty"` // npm: which dependencies are optional
 }
 
 // Load reads gtr.lock; a missing file is an empty lock.

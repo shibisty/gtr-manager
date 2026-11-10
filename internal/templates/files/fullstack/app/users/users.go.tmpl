@@ -1,0 +1,91 @@
+// Package users registers and authenticates users.
+package users
+
+import (
+	"context"
+	"errors"
+	"strconv"
+	"strings"
+
+	"fullstack"
+	database "fullstack-orm"
+	"orm"
+	"passport"
+	"passport-local"
+	"passport/passwordhash"
+
+	"{{.Name}}/app/models"
+)
+
+// ErrEmailTaken is returned by Register for an email that is already used.
+var ErrEmailTaken = errors.New("the email has already been taken")
+
+// Service registers users and looks them up.
+type Service struct {
+	app *fullstack.App
+}
+
+// Provider registers *users.Service in the container.
+type Provider struct{}
+
+// Register implements fullstack.Provider.
+func (Provider) Register(app *fullstack.App) error {
+	fullstack.Provide(app, func(app *fullstack.App) (*Service, error) { return &Service{app: app}, nil })
+	return nil
+}
+
+func (s *Service) repo() (*orm.Repository[models.User], error) { return database.Repo[models.User](s.app) }
+
+// Register creates a user with a hashed password.
+func (s *Service) Register(ctx context.Context, name, email, password string) (*models.User, error) {
+	repo, err := s.repo()
+	if err != nil {
+		return nil, err
+	}
+	email = strings.ToLower(strings.TrimSpace(email))
+	if taken, err := repo.Where("email", "=", email).Exists(ctx); err != nil {
+		return nil, err
+	} else if taken {
+		return nil, ErrEmailTaken
+	}
+	hash, err := passwordhash.Hash(password)
+	if err != nil {
+		return nil, err
+	}
+	u := &models.User{Name: strings.TrimSpace(name), Email: email, Password: hash}
+	if err := repo.Create(ctx, u); err != nil {
+		return nil, err
+	}
+	return u, nil
+}
+
+// Identity is the passport identity of a user.
+func Identity(u *models.User) *passport.Identity {
+	return &passport.Identity{Provider: "local", ProviderUserID: strconv.FormatInt(u.ID, 10), Email: u.Email, Name: u.Name}
+}
+
+// Verify is the local strategy's check: the email and password of a user
+// in the database, or passport.ErrInvalidCredentials.
+func Verify(app *fullstack.App) local.VerifyFunc {
+	return func(ctx context.Context, email, password string) (*passport.Identity, error) {
+		repo, err := database.Repo[models.User](app)
+		if err != nil {
+			return nil, err
+		}
+		u, err := repo.Where("email", "=", strings.ToLower(strings.TrimSpace(email))).First(ctx)
+		if errors.Is(err, orm.ErrNotFound) {
+			// Hash anyway, so that unknown emails take as long as wrong passwords.
+			passwordhash.Verify(password, dummyHash)
+			return nil, local.ErrInvalidCredentials
+		}
+		if err != nil {
+			return nil, err
+		}
+		if ok, err := passwordhash.Verify(password, u.Password); err != nil || !ok {
+			return nil, local.ErrInvalidCredentials
+		}
+		return Identity(u), nil
+	}
+}
+
+var dummyHash, _ = passwordhash.Hash("not a real password")

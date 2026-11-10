@@ -1,0 +1,55 @@
+package controllers
+
+import (
+	"errors"
+
+	"fullstack"
+	auth "fullstack-passport"
+	"fullstack-validation"
+	"fullstack/web"
+	"passport"
+)
+
+// API serves the JSON API.
+type API struct {
+	App  *fullstack.App
+	Auth *auth.Auth
+}
+
+// Health reports that the application is up.
+func (h API) Health(c *web.Ctx) error {
+	return c.JSON(200, map[string]string{"status": "ok", "app": h.App.Config.Name})
+}
+
+// Token exchanges an email and password for a Bearer token (needs
+// AUTH_JWT_SECRET).
+func (h API) Token(c *web.Ctx) error {
+	var in struct {
+		Email    string `json:"email" validate:"required,email"`
+		Password string `json:"password" validate:"required"`
+	}
+	if err := validation.Bind(c, &in); err != nil {
+		return err
+	}
+	id, err := h.Auth.Credential(c.Context(), "local", map[string]string{"email": in.Email, "password": in.Password})
+	if errors.Is(err, auth.ErrInvalidCredentials) {
+		return web.Error(401, "These credentials do not match our records.")
+	}
+	if err != nil {
+		return err
+	}
+	token, err := h.Auth.IssueToken(c.Context(), id)
+	if errors.Is(err, passport.ErrNoTokenIssuer) {
+		return web.Error(501, "API tokens are off: set AUTH_JWT_SECRET (32+ characters).")
+	}
+	if err != nil {
+		return err
+	}
+	return c.JSON(200, map[string]any{"token": token, "expires_in": int(h.Auth.Config.TokenTTL.Seconds())})
+}
+
+// User is the identified user.
+func (h API) User(c *web.Ctx) error {
+	u, _ := auth.User(c)
+	return c.JSON(200, u)
+}

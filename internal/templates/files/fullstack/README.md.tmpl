@@ -1,0 +1,47 @@
+# {{.Name}}
+
+A [fullstack](https://github.com/shibisty/fullstack.go) application: Go's `net/http` and
+`html/template`, SQLite through orm, users with registration and login (passport), migrations,
+seeders and HTTP tests.
+
+```bash
+gtr install
+cp .env.example .env          # Windows: copy .env.example .env
+go run . migrate              # or keep DB_MIGRATE=true in .env
+go run . db:seed              # demo@example.com / password
+gtr run dev                   # http://localhost:8080
+gtr run test
+```
+
+## Layout
+
+| | |
+|---|---|
+| `main.go` | serves HTTP, or runs a console command (`go run . list`) |
+| `bootstrap/app.go` | the App and its providers |
+| `routes/web.go`, `routes/api.go` | the routes |
+| `app/http/controllers` | the handlers |
+| `app/models` | the models (orm) |
+| `app/users` | registering and checking users |
+| `app/providers` | service providers |
+| `database/migrations`, `database/seeders` | the schema and the data |
+| `resources/views` | layouts, partials and pages (`html/template`, embedded in the binary) |
+| `tests` | HTTP tests on an in-memory database |
+
+## Console
+
+```bash
+go run . list
+go run . routes:list
+go run . make:model Post -m          # the model and its migration
+go run . make:controller Post
+go run . make:migration add_title_to_posts_table
+go run . migrate:status
+go run . migrate:rollback
+go run . db:seed
+```
+
+## Configuration
+
+`.env` (see `.env.example`): `APP_*`, `HTTP_*`, `LOG_*`, `DB_DRIVER` / `DATABASE_DSN`, `AUTH_*`.
+Variables set in the environment win over `.env`.

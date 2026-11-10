@@ -14,15 +14,19 @@ import (
 	"gtr-manager/internal/spec"
 )
 
-// Publish releases the current version: it checks the package and pushes
-// the branch and the version tag `gtr version` made. Until the registry
-// (stage 6), a release is a git tag that github:, gitlab: and git+ sources
-// install from.
+// Publish releases the current version, to the gtr registry or as a git tag:
 //
-//	gtr publish                checks, then git push --atomic origin <branch> <tag>
-//	gtr publish --dry-run      only the checks
+//	gtr publish                to the registry when logged in (gtr login), else as a git tag
+//	gtr publish --registry URL to that registry
+//	gtr publish --git          checks, then git push --atomic origin <branch> <tag>
+//	gtr publish --dry-run      only the checks (and the files of the archive)
 //	gtr publish --skip-tests   without running the tests
-//	gtr publish --remote up    another remote
+//	gtr publish --remote up    another remote (git)
+//
+// To the registry, the package's files (those git does not ignore, without
+// generated go.mod, gtr_modules, build output) go up as a .tar.gz; a
+// published version is never replaced. As a tag, the tag `gtr version` made
+// is pushed, and github:, gitlab: and git+ sources install from it.
 //
 // Checks: gtr.json has a name and a SemVer version and is not private;
 // dependencies have no file: or workspace: sources (nobody else can
@@ -30,10 +34,18 @@ import (
 // at HEAD; the tests pass (with the coverage threshold of gtr.json); the
 // remote does not have the tag yet.
 func Publish(args []string) error {
-	dryRun, skipTests, remote := false, false, "origin"
+	regURL, args, err := parseRegistryFlag(args)
+	if err != nil {
+		return err
+	}
+	dryRun, skipTests, remote, useGit, allowDirty := false, false, "origin", false, false
 	for i := 0; i < len(args); i++ {
 		a := args[i]
 		switch {
+		case a == "--git":
+			useGit = true
+		case a == "--allow-dirty":
+			allowDirty = true
 		case a == "--dry-run" || a == "-n":
 			dryRun = true
 		case a == "--skip-tests":
@@ -44,7 +56,7 @@ func Publish(args []string) error {
 		case strings.HasPrefix(a, "--remote="):
 			remote = strings.TrimPrefix(a, "--remote=")
 		default:
-			return fmt.Errorf("unknown argument %q; usage: gtr publish [--dry-run] [--skip-tests] [--remote origin]", a)
+			return fmt.Errorf("unknown argument %q; usage: gtr publish [--registry <url> | --git] [--dry-run] [--skip-tests] [--remote origin]", a)
 		}
 	}
 	pkgs, err := packages(false)
@@ -70,6 +82,13 @@ func Publish(args []string) error {
 		return fmt.Errorf("these dependencies are only reachable here, so nobody could install the package:\n  %s\nuse a published source such as \"github:owner/repo/subdir#^0.1\"", strings.Join(bad, "\n  "))
 	}
 	step("gtr.json: %s %s", p.M.Name, p.M.Version)
+
+	if !useGit {
+		c := clientFor(regURL)
+		if regURL != "" || c.Token != "" {
+			return publishToRegistry(p, c, dryRun, skipTests, allowDirty, step)
+		}
+	}
 
 	repo, err := findRepo(p.Dir)
 	if err != nil {
@@ -110,21 +129,8 @@ func Publish(args []string) error {
 	}
 	if skipTests {
 		fmt.Fprintln(Stderr, "- tests skipped (--skip-tests)")
-	} else {
-		cfg, err := loadTestConfig(p.M)
-		if err != nil {
-			return err
-		}
-		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
-		err = runTests(ctx, []pkgDir{p}, testOptions{coverage: cfg.Coverage != nil})
-		stop()
-		if err != nil {
-			if code, silent := ExitCode(err); silent {
-				return &exitError{code: code, msg: "the tests failed; not publishing"}
-			}
-			return err
-		}
-		step("tests pass")
+	} else if err := publishTests(p); err != nil {
+		return err
 	}
 
 	push := []string{"push", "--atomic", remote}
@@ -144,6 +150,25 @@ func Publish(args []string) error {
 		return err
 	}
 	fmt.Fprintf(Stdout, "Published %s %s (tag %s on %s)\n", p.M.Name, p.M.Version, tag, remote)
+	return nil
+}
+
+// publishTests runs the package's tests (with its coverage threshold).
+func publishTests(p pkgDir) error {
+	cfg, err := loadTestConfig(p.M)
+	if err != nil {
+		return err
+	}
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	err = runTests(ctx, []pkgDir{p}, testOptions{coverage: cfg.Coverage != nil})
+	stop()
+	if err != nil {
+		if code, silent := ExitCode(err); silent {
+			return &exitError{code: code, msg: "the tests failed; not publishing"}
+		}
+		return err
+	}
+	fmt.Fprintln(Stderr, "✓ tests pass")
 	return nil
 }
 

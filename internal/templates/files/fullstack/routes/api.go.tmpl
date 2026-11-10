@@ -1,0 +1,20 @@
+package routes
+
+import (
+	"fullstack"
+	auth "fullstack-passport"
+	"fullstack/web"
+
+	"{{.Name}}/app/http/controllers"
+)
+
+// API registers the JSON API under /api: Bearer tokens only (AUTH_JWT_SECRET).
+func API(app *fullstack.App, au *auth.Auth) {
+	api := controllers.API{App: app, Auth: au}
+	app.Router.Group("/api", func(r *web.Router) {
+		r.Use(au.API())
+		r.Get("/health", api.Health).Name("api.health")
+		r.Post("/token", api.Token).Name("api.token")
+		r.Get("/user", api.User, au.Require()).Name("api.user")
+	})
+}

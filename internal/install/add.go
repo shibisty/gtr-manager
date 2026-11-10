@@ -8,6 +8,7 @@ import (
 
 	"gtr-manager/internal/gomodules"
 	"gtr-manager/internal/manifest"
+	"gtr-manager/internal/npm"
 	"gtr-manager/internal/semver"
 	"gtr-manager/internal/spec"
 )
@@ -19,6 +20,7 @@ import (
 //	git+https://host/repo.git[//subdir][#range]   (also git+ssh://, git+file://)
 //	file:../path                         a local package
 //	<name>=<source>                      explicit name, e.g. orm=github:shibisty/orm.go
+//	npm:<name>[@range]                   an npm package for the frontend: npm:preact, npm:@preact/signals@^1
 //
 // Without a range, a GitHub package is added as ^<installed version>.
 func (in *Installer) Add(ctx context.Context, args []string, dev bool) error {
@@ -80,13 +82,18 @@ func (in *Installer) parseAdd(ctx context.Context, arg string) (name, value stri
 		explicit, arg = n, v
 	}
 	switch {
+	case strings.HasPrefix(arg, "npm:"):
+		return in.parseAddNPM(ctx, strings.TrimPrefix(arg, "npm:"))
 	case strings.HasPrefix(arg, "github:"), strings.HasPrefix(arg, "gitlab:"), strings.HasPrefix(arg, "git+"), strings.HasPrefix(arg, "file:"):
 	case spec.IsGoModule(strings.SplitN(arg, "@", 2)[0]):
 		return in.parseAddModule(ctx, arg, explicit)
 	case explicit == "" && in.isMember(arg):
 		return arg, "workspace:*", nil
 	default:
-		return "", "", fmt.Errorf("%s: the gtr registry is not available yet (stage 6); add the package by its source, e.g. `gtr add github:owner/repo`", arg)
+		if explicit != "" {
+			return "", "", fmt.Errorf("%s: a registry package is added by its name, e.g. `gtr add %s`", arg, explicit)
+		}
+		return in.parseAddRegistry(ctx, arg)
 	}
 	s, err := spec.Parse("package", arg)
 	if err != nil {
@@ -104,16 +111,77 @@ func (in *Installer) parseAdd(ctx context.Context, arg string) (name, value stri
 		return "", "", fmt.Errorf("%s is named %q in its gtr.json, not %q", arg, found, explicit)
 	}
 	if s.IsGit() && s.Range == "*" && !c.Head {
-		v := semver.MustParse(c.Version)
-		s.Range = "^" + v.String()
-		if v.Major == 0 {
-			s.Range = fmt.Sprintf("^%d.%d", v.Major, v.Minor) // ^0.2 = >=0.2.0 <0.3.0
-			if v.Minor == 0 {
-				s.Range = "^" + v.String()
-			}
-		}
+		s.Range = caretRange(semver.MustParse(c.Version))
 	}
 	return found, s.String(), nil
+}
+
+// parseAddRegistry handles `gtr add orm[@range]`: a package of the gtr
+// registry, added as ^<latest version> without a range.
+func (in *Installer) parseAddRegistry(ctx context.Context, arg string) (string, string, error) {
+	name, rng, _ := strings.Cut(arg, "@")
+	if err := spec.ValidateName(name); err != nil {
+		return "", "", fmt.Errorf("%s: %w; add other packages by their source, e.g. `gtr add github:owner/repo`", arg, err)
+	}
+	if rng != "" && rng != "latest" {
+		if _, err := semver.ParseRange(rng); err != nil {
+			return "", "", fmt.Errorf("%s: invalid version range %q", name, rng)
+		}
+		return name, rng, nil
+	}
+	p, err := in.Providers(spec.Registry)
+	if err != nil {
+		return "", "", err
+	}
+	cands, err := p.Candidates(ctx, name, spec.Spec{Kind: spec.Registry, Range: "*"})
+	if err != nil {
+		return "", "", err
+	}
+	for _, c := range cands { // highest first
+		v := semver.MustParse(c.Version)
+		if c.Yanked || v.Pre != "" {
+			continue
+		}
+		return name, caretRange(v), nil
+	}
+	return "", "", fmt.Errorf("%s has no published version in the registry (only prereleases or yanked ones)", name)
+}
+
+// caretRange is the range `gtr add` writes for a version: ^1.2.3, and for
+// 0.x the minor (^0.2 = >=0.2.0 <0.3.0).
+func caretRange(v semver.Version) string {
+	if v.Major == 0 && v.Minor != 0 {
+		return fmt.Sprintf("^%d.%d", v.Major, v.Minor)
+	}
+	return "^" + v.String()
+}
+
+// parseAddNPM handles `gtr add npm:preact[@range]`: without a range the
+// package is added as ^<latest version>.
+func (in *Installer) parseAddNPM(ctx context.Context, arg string) (string, string, error) {
+	name, rng := arg, ""
+	if i := strings.LastIndex(arg, "@"); i > 0 { // "@scope/name@^1": the scope's @ is at 0
+		name, rng = arg[:i], arg[i+1:]
+	}
+	if err := npm.ValidName(name); err != nil {
+		return "", "", err
+	}
+	if rng != "" && rng != "latest" {
+		if _, err := npm.ParseRange(rng); err != nil {
+			return "", "", fmt.Errorf("%s: %w", name, err)
+		}
+		return name, "npm:" + rng, nil
+	}
+	p, err := in.npmRegistry().Packument(ctx, name)
+	if err != nil {
+		return "", "", err
+	}
+	r, _ := npm.ParseRange("*")
+	rel, ok := p.Best(r)
+	if !ok {
+		return "", "", fmt.Errorf("npm: %s has no stable version", name)
+	}
+	return name, "npm:^" + rel.Version, nil
 }
 
 // parseAddModule handles `gtr add github.com/x/y[@range]`.

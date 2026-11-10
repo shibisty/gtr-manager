@@ -47,6 +47,7 @@ var Description = map[string]string{
 	"cli":        "a command-line tool: flags, version, a testable run()",
 	"lib":        "a library package with a test and an example",
 	"orm-driver": "an orm driver on database/sql (peer orm ^0.1, drivertest)",
+	"fullstack":  "a fullstack web application: SQLite, users, login, migrations, views, tests",
 }
 
 // NewData derives the template data from a package name.
@@ -55,7 +56,7 @@ func NewData(tmpl, name, version string) Data {
 	if tmpl == "orm-driver" {
 		ident = strings.ReplaceAll(strings.TrimPrefix(name, "orm-"), "-", "")
 	}
-	if tmpl == "app" || tmpl == "cli" {
+	if tmpl == "app" || tmpl == "cli" || tmpl == "fullstack" {
 		ident = "main"
 	}
 	return Data{Name: name, Package: ident, Version: version, EnvName: strings.ToUpper(strings.ReplaceAll(strings.TrimPrefix(name, "orm-"), "-", "_"))}
@@ -92,24 +93,30 @@ func Write(tmpl, dir string, data Data) (map[string]json.RawMessage, error) {
 		if err != nil || d.IsDir() {
 			return err
 		}
-		rel := strings.TrimSuffix(strings.TrimPrefix(p, root+"/"), ".tmpl")
+		// Files ending in .tmpl are text/templates; others (HTML views with
+		// their own {{...}}) are copied as they are.
+		rel, isTmpl := strings.CutSuffix(strings.TrimPrefix(p, root+"/"), ".tmpl")
 		rel = strings.ReplaceAll(rel, "__pkg__", data.Package)
+		rel = strings.ReplaceAll(rel, "__dot__", ".") // .env.example, .gitignore: dotfiles are not embedded
 		src, err := fs.ReadFile(files, p)
 		if err != nil {
 			return err
 		}
-		t, err := template.New(rel).Option("missingkey=error").Parse(string(src))
-		if err != nil {
-			return err
-		}
-		var out bytes.Buffer
-		if err := t.Execute(&out, data); err != nil {
-			return err
+		content := src
+		if isTmpl {
+			t, err := template.New(rel).Option("missingkey=error").Parse(string(src))
+			if err != nil {
+				return err
+			}
+			var out bytes.Buffer
+			if err := t.Execute(&out, data); err != nil {
+				return err
+			}
+			content = out.Bytes()
 		}
 		if rel == "gtr.json" {
-			return json.Unmarshal(out.Bytes(), &fields)
+			return json.Unmarshal(content, &fields)
 		}
-		content := out.Bytes()
 		if strings.HasSuffix(rel, ".go") {
 			// Names of different lengths change gofmt's alignment.
 			if formatted, err := format.Source(content); err == nil {

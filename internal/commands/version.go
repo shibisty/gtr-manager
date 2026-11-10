@@ -79,7 +79,11 @@ func (r gitRepo) dirty() ([]string, error) {
 	if err != nil || out == "" {
 		return nil, err
 	}
-	return strings.Split(out, "\n"), nil
+	lines := strings.Split(out, "\n")
+	for i, l := range lines {
+		lines[i] = strings.TrimSpace(l) // " M a.go": git's output is trimmed as a whole
+	}
+	return lines, nil
 }
 
 // bump computes the next version: patch, minor, major, pre<kind>,

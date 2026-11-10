@@ -102,6 +102,7 @@ func TestPackageCommands(t *testing.T) {
 
 func TestInit(t *testing.T) {
 	project(t, "")
+	t.Setenv("GTR_GO_VERSION", "") // set when the tests run under gtr (gtr test)
 	Stdin = strings.NewReader("my-app\n2.0.0\nAnn\n\n\n")
 	if err := Init(nil); err != nil {
 		t.Fatal(err)
@@ -234,6 +235,33 @@ func TestRun(t *testing.T) {
 	}
 	if err := Run([]string{"empty"}); err == nil {
 		t.Fatal("empty script must be an error")
+	}
+}
+
+func TestSuggest(t *testing.T) {
+	cmds := []string{"install", "test", "build", "publish", "run"}
+	for in, want := range map[string]string{
+		"instal": "install", "isntall": "install", "inst": "install", "tset": "test", "biuld": "build",
+		"pubish": "publish", "rn": "run", "xyz": "", "deploy": "", "": "",
+	} {
+		if got := Suggest(in, cmds); got != want {
+			t.Errorf("Suggest(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+func TestHasScript(t *testing.T) {
+	project(t, `{"name":"app","scripts":{"migrate":"echo m","blank":" "}}`)
+	if !HasScript("migrate") || HasScript("blank") || HasScript("nope") {
+		t.Fatal("HasScript")
+	}
+	t.Chdir(t.TempDir())
+	if HasScript("migrate") {
+		t.Fatal("no gtr.json")
+	}
+	os.WriteFile(manifest.FileName, []byte("{broken"), 0o644)
+	if HasScript("migrate") {
+		t.Fatal("broken gtr.json")
 	}
 }
 

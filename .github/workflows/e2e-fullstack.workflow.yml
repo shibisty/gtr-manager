@@ -1,0 +1,70 @@
+name: e2e fullstack template
+
+# Move this file to .github/workflows/e2e-fullstack.yml once the fullstack packages
+# (fullstack.go, -validation, -passport, -orm, -testing) and orm-sqlite 0.1.1 are released:
+# the generated project installs them from GitHub.
+#
+# Builds gtr-manager from this commit, creates a project with
+# `gtr new --template fullstack`, installs it and runs its tests, its console
+# commands and the server.
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+  schedule:
+    - cron: "17 4 * * 1" # weekly: the template's dependencies move without this repo
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  fullstack:
+    name: fullstack (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    env:
+      GITHUB_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: stable
+          cache: false
+      - name: build gtr from this commit
+        shell: bash
+        run: |
+          go build -o "$RUNNER_TEMP/bin/gtr$(go env GOEXE)" ./cmd/gtr-manager
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+      - name: gtr new blog --template fullstack
+        shell: bash
+        working-directory: ${{ runner.temp }}
+        run: gtr new blog --template fullstack -y
+      - name: gtr install
+        working-directory: ${{ runner.temp }}/blog
+        run: gtr install
+      - name: vet
+        working-directory: ${{ runner.temp }}/blog
+        run: go vet ./...
+      - name: test
+        working-directory: ${{ runner.temp }}/blog
+        run: gtr run test
+      - name: console and server
+        shell: bash
+        working-directory: ${{ runner.temp }}/blog
+        run: |
+          cp .env.example .env
+          go build -o build/blog .
+          ./build/blog migrate
+          ./build/blog db:seed
+          ./build/blog routes:list
+          ./build/blog make:model Post -m
+          go vet ./...
+          HTTP_ADDR=127.0.0.1:18080 ./build/blog &
+          for i in $(seq 1 30); do curl -fsS http://127.0.0.1:18080/api/health && break; sleep 1; done
+          curl -fsS http://127.0.0.1:18080/ | grep -q "Welcome to blog"
+          kill %1

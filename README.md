@@ -162,6 +162,7 @@ gtr init [name] [-y]               # gtr.json in the current directory
 | `cli` | a command-line tool: flags, `-version` set at build time, a testable `run()` |
 | `lib` | a library package with a test and an example, version 0.1.0 |
 | `orm-driver` | an orm driver on `database/sql`: peer `orm ^0.1`, the shared `orm/drivertest` suite as an integration test |
+| `fullstack` | a web application on the fullstack framework: SQLite, users with registration and login, migrations, seeders, views, HTTP tests; `go run . list` shows its console commands |
 | `none` | `gtr.json` and `.gitignore` only |
 
 `init` writes `gtr.json` and adds `gtr_modules/`, `go.mod` and `go.work` to `.gitignore`.
@@ -190,6 +191,62 @@ version tags can still be used with `*`: gtr takes the tip of the default branch
 pins its commit in `gtr.lock` (version `0.0.0-g<commit>`). Such a version satisfies peer
 ranges (`"orm": "^0.1"`), so packages can depend on each other before their first release,
 but not dependency ranges.
+
+## The gtr registry
+
+Packages published to a gtr registry ([gtr-registry](https://github.com/shibisty/gtr-registry)) are
+added by their name:
+
+```bash
+gtr add greet                         # saved as "greet": "^0.1" (the newest version)
+gtr add greet@^0.1.0
+gtr search greet
+gtr info greet                        # description, owners, versions
+```
+
+The registry sends each version's gtr.json and the SHA-256 of its archive; gtr-manager checks the
+archive on download, keeps it in the store, and records `"source": "registry:<url>"` and the
+checksum in `gtr.lock`. A yanked version is skipped by new installs and updates, but a project
+whose gtr.lock has it keeps installing it. `--offline` works from the store.
+
+The registry is `GTR_REGISTRY`, else the one of the last `gtr login`, else `http://localhost:4873`
+(a gtr-registry running locally, until a public one exists). Publishing:
+
+```bash
+gtr login                             # email and password (or --token gtr_...), saved in ~/.gtr/registry.json
+gtr publish                           # checks, tests, then the archive
+gtr yank greet@0.1.1                  # --undo brings it back
+gtr owner add greet bob@example.com   # owner greet | owner remove greet <email>
+gtr logout
+```
+
+`GTR_REGISTRY_TOKEN` gives a token in CI (make one on the registry's dashboard).
+
+## npm packages (frontend)
+
+Frontend packages come from the npm registry, without npm or Node.js:
+
+```bash
+gtr add npm:preact                    # saved as "npm:^10.19.3"
+gtr add npm:@preact/signals@^1.2
+```
+
+```json
+"dependencies": {
+    "preact": "npm:^10.19"
+}
+```
+
+They go into `node_modules/` (added to `.gitignore`), where esbuild (fullstack-bundler) and editors
+find them; they never reach `go.mod`. Versions follow npm's range rules (`^`, `~`, `x`, `||`,
+`1.2 - 2.0`; the `latest` tag first), and dependencies are hoisted like npm does: a second version
+of a package goes into its dependent's own `node_modules`. Tarballs are checked against the
+registry's `integrity` hash and kept in `~/.gtr/store/npm`; `gtr.lock` records every package (its
+`npm` section), and `gtr ci` installs exactly that. **Install scripts never run**: packages that
+need a `postinstall` step (native addons) are not supported. A gtr package can declare `npm:`
+dependencies too; they are installed into the project's `node_modules`.
+
+`GTR_NPM_REGISTRY` points to another registry (a mirror, Verdaccio), `GTR_NPM_TOKEN` is its bearer token.
 
 ## External Go modules
 
@@ -300,7 +357,12 @@ gtr run                     # the "start" script (or: gtr start)
 gtr run build
 gtr run test -- -run TestLogin -v   # arguments after -- go to the script
 gtr run -r test                     # in every workspace member that has "test"
+gtr migrate                         # a script that is not a gtr command runs like `gtr run migrate`
 ```
+
+Without a script of that name, `gtr run test`, `build`, `dev`, `install` and `ci` run the gtr command
+of the same name (with a note). A mistyped script or command gets a suggestion:
+`script "tset" is not defined; did you mean "test"?`, ``Did you mean `gtr install`?``.
 
 Scripts run in the directory of the nearest `gtr.json`. `pre<name>` and `post<name>` run
 around a script when they are defined (`pretest`, `posttest`); the arguments go to the
@@ -376,8 +438,10 @@ overrides it). `build.tags` apply to tests too.
 ```bash
 gtr version                     # orm-mysql 0.1.0
 gtr version patch               # 0.1.0 → 0.1.1 (minor, major, 2.0.0, prerelease --preid rc)
-gtr publish --dry-run           # the checks only
-gtr publish                     # git push --atomic origin <branch> <tag>
+gtr publish --dry-run           # the checks only (and the files of the archive)
+gtr publish                     # to the registry when logged in (gtr login), else as a git tag
+gtr publish --git               # git push --atomic origin <branch> <tag>
+gtr publish --registry <url>    # to another registry
 ```
 
 `gtr version <bump>` writes the version to `gtr.json`, turns `## Unreleased` of
@@ -389,9 +453,14 @@ members whose ranges no longer accept the new version.
 
 `gtr publish` checks that `gtr.json` has a name and a version and is not `private`, that
 `dependencies` and `peerDependencies` have no `file:` or `workspace:` sources (nobody else
-could install them), that the repository is clean, that the version tag is on `HEAD`, that
-the tests pass (with the `test.coverage` threshold; `--skip-tests`), and that the remote
-does not have the tag yet; then it pushes the branch and the tag together.
+could install them), that the repository is clean, and that the tests pass (with the
+`test.coverage` threshold; `--skip-tests`). To the registry it then checks that the version
+is new and uploads the package: the files git does not ignore (all files outside a
+repository), without `go.mod`, `go.sum`, `gtr.lock`, `gtr_modules/`, `node_modules/`,
+`build/`, `.github/`, `.env*` (but `.env.example`) and test binaries, as a `.tar.gz`
+(`--allow-dirty` publishes uncommitted changes). With `--git` (and without a registry login)
+it checks that the version tag is on `HEAD` and that the remote does not have it yet, and
+pushes the branch and the tag together.
 
 ## Link a local copy
 
@@ -504,7 +573,7 @@ steps:
 | Local directory | `file:../path` | Supported |
 | External Go modules | `"github.com/go-sql-driver/mysql": "^1.10"` | Supported |
 | Workspace members | `workspace:*`, `workspace:^0.2` | Supported (ADR-0009) |
-| GTR registry | `"orm": "^0.1"` | Stage 6 |
+| GTR registry | `"orm": "^0.1"` | Supported (gtr-registry) |
 
 For GitHub Enterprise or a mirror set `GTR_GITHUB_API` (and `GTR_GITHUB_TOKEN` for its
 token; `GITHUB_TOKEN` is only ever sent to api.github.com). Private repositories and

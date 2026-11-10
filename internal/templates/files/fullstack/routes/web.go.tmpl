@@ -1,0 +1,30 @@
+// Package routes registers the application's routes.
+package routes
+
+import (
+	"time"
+
+	"fullstack"
+	auth "fullstack-passport"
+	"fullstack/web"
+
+	"{{.Name}}/app/http/controllers"
+)
+
+// Web registers the pages: the session cookie identifies the user and
+// forms carry the CSRF token.
+func Web(app *fullstack.App, au *auth.Auth) {
+	home := controllers.Home{App: app}
+	login := controllers.Auth{App: app, Auth: au}
+	app.Router.Group("/", func(r *web.Router) {
+		r.Use(au.Web(), au.CSRF())
+		r.Get("/", home.Index).Name("home")
+		r.Get("/dashboard", home.Dashboard, au.Require()).Name("dashboard")
+
+		r.Get("/login", login.ShowLogin, au.Guest()).Name("login")
+		r.Post("/login", login.Login, au.Guest(), au.Throttle(5, time.Minute))
+		r.Get("/register", login.ShowRegister, au.Guest()).Name("register")
+		r.Post("/register", login.Register, au.Guest())
+		r.Post("/logout", login.Logout, au.Require()).Name("logout")
+	})
+}

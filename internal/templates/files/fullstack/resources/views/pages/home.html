@@ -1,0 +1,11 @@
+{{define "content"}}
+<h1>Welcome to {{.App}}</h1>
+<p>A fullstack Go application: routes in <code>routes/</code>, handlers in <code>app/http/controllers</code>,
+views in <code>resources/views</code>, migrations in <code>database/migrations</code>.</p>
+{{if .User}}
+  <p>You are logged in as {{.User.Name}}. <a href="/dashboard">Go to the dashboard</a>.</p>
+{{else}}
+  <p><a href="/register">Create an account</a> or <a href="/login">log in</a>
+  (after <code>go run . db:seed</code>: demo@example.com / password).</p>
+{{end}}
+{{end}}

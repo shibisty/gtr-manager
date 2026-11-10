@@ -15,6 +15,10 @@ type Candidate struct {
 	Tag     string // git tag, empty for file: and branch heads
 	Commit  string // full commit SHA for git sources
 	Head    bool   // the default branch of a repository without version tags
+	// Yanked versions (registry) are skipped unless gtr.lock has them.
+	Yanked bool
+	// SHA256 is the archive's checksum (registry), checked on download.
+	SHA256 string
 }
 
 // ErrNoManifest means the package has no gtr.json.

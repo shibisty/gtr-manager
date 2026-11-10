@@ -74,7 +74,17 @@ parsed:
 		return err
 	}
 	if strings.TrimSpace(m.Scripts[name]) == "" {
-		return fmt.Errorf("script %q is not defined in %s%s", name, filepath.Join(dir, manifest.FileName), available(m.Scripts))
+		// No such script: a gtr command of that name is what was meant
+		// (gtr run test → gtr test), as npm runs its own test without a script.
+		if fn, ok := builtinScripts()[name]; ok {
+			fmt.Fprintf(Stderr, "gtr: no script %q in gtr.json, running `gtr %s`\n", name, name)
+			return fn(args)
+		}
+		msg := fmt.Sprintf("script %q is not defined in %s", name, filepath.Join(dir, manifest.FileName))
+		if s := closest(name, scriptNames(m.Scripts)); s != "" {
+			msg += fmt.Sprintf("; did you mean %q?", s)
+		}
+		return errors.New(msg + available(m.Scripts))
 	}
 	var env []string
 	if dotenv {
@@ -288,6 +298,88 @@ func runScript(dir, command string, args, extra []string) error {
 		hints.Close()
 	}
 	return err
+}
+
+// builtinScripts are the gtr commands that `gtr run <name>` falls back to
+// when gtr.json has no script of that name.
+func builtinScripts() map[string]func([]string) error {
+	return map[string]func([]string) error{
+		"test": Test, "build": Build, "dev": Dev, "install": Install, "ci": CI,
+	}
+}
+
+// HasScript reports whether the nearest gtr.json (at or above the working
+// directory) defines a script: `gtr migrate` runs the script "migrate".
+func HasScript(name string) bool {
+	wd, err := os.Getwd()
+	if err != nil {
+		return false
+	}
+	dir := findManifestDir(wd)
+	if dir == "" {
+		return false
+	}
+	m, err := manifest.Load(filepath.Join(dir, manifest.FileName))
+	return err == nil && strings.TrimSpace(m.Scripts[name]) != ""
+}
+
+// Suggest returns the closest of candidates to a mistyped name ("" when
+// none is close): one or two edits away, or a prefix.
+func Suggest(name string, candidates []string) string { return closest(name, candidates) }
+
+func scriptNames(scripts map[string]string) []string {
+	names := make([]string, 0, len(scripts))
+	for n, c := range scripts {
+		if strings.TrimSpace(c) != "" {
+			names = append(names, n)
+		}
+	}
+	sort.Strings(names)
+	return names
+}
+
+func closest(name string, candidates []string) string {
+	best, bestDist := "", 3
+	for _, c := range candidates {
+		d := editDistance(strings.ToLower(name), strings.ToLower(c))
+		if len(name) >= 3 && strings.HasPrefix(c, name) && d > 1 {
+			d = 1 // "inst" → "install"
+		}
+		if d < bestDist || d == bestDist && c < best {
+			best, bestDist = c, d
+		}
+	}
+	if bestDist > 2 || bestDist > len(name)/2 {
+		return ""
+	}
+	return best
+}
+
+// editDistance is the Damerau-Levenshtein distance (a swap of two
+// neighbours counts as one edit: "tset" → "test").
+func editDistance(a, b string) int {
+	ra, rb := []rune(a), []rune(b)
+	d := make([][]int, len(ra)+1)
+	for i := range d {
+		d[i] = make([]int, len(rb)+1)
+		d[i][0] = i
+	}
+	for j := range d[0] {
+		d[0][j] = j
+	}
+	for i := 1; i <= len(ra); i++ {
+		for j := 1; j <= len(rb); j++ {
+			cost := 1
+			if ra[i-1] == rb[j-1] {
+				cost = 0
+			}
+			d[i][j] = min(d[i-1][j]+1, d[i][j-1]+1, d[i-1][j-1]+cost)
+			if i > 1 && j > 1 && ra[i-1] == rb[j-2] && ra[i-2] == rb[j-1] {
+				d[i][j] = min(d[i][j], d[i-2][j-2]+1)
+			}
+		}
+	}
+	return d[len(ra)][len(rb)]
 }
 
 func available(scripts map[string]string) string {

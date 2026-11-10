@@ -296,7 +296,6 @@ func TestAddErrors(t *testing.T) {
 	p := newProject(t, gh, `{"name":"app","version":"1.0.0"}`)
 	p.in.GoProxy = &gomodules.Proxies{Public: &gomodules.Proxy{URL: "http://127.0.0.1:1", Client: http.DefaultClient}}
 	for arg, want := range map[string]string{
-		"orm":                            "registry is not available",
 		"github.com/go-sql-driver/mysql": "module proxy",
 		"github:someone/plain":           "no gtr.json",
 		"github:shibisty/orm.go#^9":      "no version matches",

@@ -22,6 +22,8 @@ import (
 	"gtr-manager/internal/link"
 	"gtr-manager/internal/lock"
 	"gtr-manager/internal/manifest"
+	"gtr-manager/internal/npm"
+	"gtr-manager/internal/registry"
 	"gtr-manager/internal/resolve"
 	"gtr-manager/internal/semver"
 	"gtr-manager/internal/source"
@@ -44,14 +46,17 @@ type Installer struct {
 	Dir string // project directory (the workspace root in a workspace)
 	// Member is the member directory (relative to Dir, slash-separated)
 	// whose gtr.json add and remove change; "" for the root.
-	Member  string
-	Home    home.Layout // ~/.gtr
-	GitHub  source.Provider
-	GitLab  source.Provider    // nil: not configured (tests)
-	Git     source.Provider    // nil: not configured (tests)
-	GoProxy *gomodules.Proxies // external Go modules; nil: from the environment
-	SumDB   *gomodules.SumDB   // checksum database; nil: no checks (tests)
-	Log     io.Writer          // progress and warnings (stderr)
+	Member string
+	Home   home.Layout // ~/.gtr
+	GitHub source.Provider
+	GitLab source.Provider // nil: not configured (tests)
+	Git    source.Provider // nil: not configured (tests)
+	// Registry is the gtr registry ("orm": "^0.2"); nil: the one in use
+	// (GTR_REGISTRY, gtr login).
+	Registry source.Provider
+	GoProxy  *gomodules.Proxies // external Go modules; nil: from the environment
+	SumDB    *gomodules.SumDB   // checksum database; nil: no checks (tests)
+	Log      io.Writer          // progress and warnings (stderr)
 	// CheckName rejects names taken by the standard library (ADR-0002);
 	// nil skips the check.
 	CheckName func(name string) error
@@ -61,6 +66,9 @@ type Installer struct {
 	// Offline installs from the store and the module cache only (--offline):
 	// no network, versions limited to what was downloaded before.
 	Offline bool
+	// NPM is the registry of npm: dependencies; nil: the public registry
+	// (GTR_NPM_REGISTRY, GTR_NPM_TOKEN).
+	NPM *npm.Registry
 
 	ws      *workspaceSource // members of the workspace being installed
 	offline *storeSource     // gtr packages when Offline
@@ -234,7 +242,13 @@ func (in *Installer) Providers(k spec.Kind) (source.Provider, error) {
 	case spec.File:
 		return in.file(), nil
 	case spec.Registry:
-		return nil, errors.New(`the gtr registry is not available yet (stage 6); use a GitHub source: "github:owner/repo#^0.1"`)
+		if in.Offline {
+			return in.storeSrc(), nil
+		}
+		if in.Registry == nil {
+			in.Registry = source.NewRegistry()
+		}
+		return in.Registry, nil
 	case spec.GoModule:
 		return nil, errors.New("external Go modules are selected by minimal version selection, not by this resolver")
 	case spec.Workspace:
@@ -308,9 +322,11 @@ func (in *Installer) Install(ctx context.Context, opts Options) error {
 	}
 	gtrRoot, goRoot := map[string]spec.Spec{}, map[string]spec.Spec{}
 	for name, s := range root {
-		if s.Kind == spec.GoModule {
+		switch s.Kind {
+		case spec.GoModule:
 			goRoot[name] = s
-		} else {
+		case spec.NPM: // node_modules, after the gtr packages (installNPM)
+		default:
 			gtrRoot[name] = s
 		}
 	}
@@ -425,6 +441,9 @@ func (in *Installer) Install(ctx context.Context, opts Options) error {
 	if err := in.linkGo(mods, goDirs); err != nil {
 		return err
 	}
+	if err := in.installNPM(ctx, npmDeps(root, nodes), old, newLock, opts); err != nil {
+		return err
+	}
 	// gtr.json first: if writing go.mod fails, a rerun regenerates it, while
 	// a go.mod written without its gtr.json changes would lose them.
 	if migrated || opts.SaveAfter || adjusted {
@@ -467,11 +486,11 @@ func (in *Installer) Install(ctx context.Context, opts Options) error {
 	} else if err := writeIfChanged(lockPath, newLock); err != nil {
 		return err
 	}
-	if err := ensureGitignore(in.Dir, m, len(members) > 0); err != nil {
+	if err := ensureGitignore(in.Dir, m, len(members) > 0, len(newLock.NPM) > 0); err != nil {
 		return err
 	}
 	for _, name := range sortedKeys(members) {
-		if err := ensureGitignore(members[name].Abs, members[name].Manifest, false); err != nil {
+		if err := ensureGitignore(members[name].Abs, members[name].Manifest, false, false); err != nil {
 			return err
 		}
 	}
@@ -487,7 +506,7 @@ func rootSpecs(m *manifest.Manifest) (map[string]spec.Spec, error) {
 	root := map[string]spec.Spec{}
 	for _, deps := range []map[string]string{m.Dependencies, m.DevDependencies} {
 		for name, value := range deps {
-			if err := spec.ValidateKey(name); err != nil {
+			if err := spec.ValidateDep(name, value); err != nil {
 				return nil, fmt.Errorf("gtr.json: %w", err)
 			}
 			s, err := spec.Parse(name, value)
@@ -653,6 +672,9 @@ func (in *Installer) materialize(ctx context.Context, n *resolve.Node, prev lock
 }
 
 func sourceString(s spec.Spec) string {
+	if s.Kind == spec.Registry {
+		return "registry:" + registry.URL() // which registry it came from
+	}
 	s.Range = ""
 	return s.String()
 }
@@ -918,14 +940,18 @@ func writeIfChanged(path string, l *lock.Lock) error {
 }
 
 // ensureGitignore adds what gtr generates to dir/.gitignore (ADR-0001,
-// item 7; ADR-0009 for a workspace root).
-func ensureGitignore(dir string, m *manifest.Manifest, workspace bool) error {
+// item 7; ADR-0009 for a workspace root). npm is set when node_modules is
+// installed in dir: in a workspace that is the root, not the members.
+func ensureGitignore(dir string, m *manifest.Manifest, workspace, npm bool) error {
 	want := []string{ModulesDir + "/"}
 	if string(m.Raw("gomod")) != `"commit"` {
 		want = append(want, "go.mod", "go.work")
 	}
 	if workspace {
 		want = append(want, "go.work.sum")
+	}
+	if npm {
+		want = append(want, "node_modules/")
 	}
 	return Gitignore(dir, want...)
 }

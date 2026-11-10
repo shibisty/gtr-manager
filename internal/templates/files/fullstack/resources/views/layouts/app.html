@@ -1,0 +1,25 @@
+{{define "layout"}}<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{block "title" .}}{{.App}}{{end}}</title>
+  <style>
+    :root { color-scheme: light dark; --accent: #4f46e5; }
+    body { font: 16px/1.5 system-ui, sans-serif; max-width: 44rem; margin: 0 auto; padding: 1rem; }
+    nav { display: flex; gap: 1rem; align-items: center; padding-bottom: 1rem; border-bottom: 1px solid #8884; }
+    nav .spacer { flex: 1; }
+    nav form { display: inline; }
+    a { color: var(--accent); }
+    form.card { display: grid; gap: .75rem; max-width: 22rem; }
+    label { display: grid; gap: .25rem; }
+    input { font: inherit; padding: .4rem .5rem; }
+    button { font: inherit; padding: .4rem .9rem; cursor: pointer; }
+    .error { color: #dc2626; font-size: .9rem; }
+  </style>
+</head>
+<body>
+  {{template "nav" .}}
+  <main>{{block "content" .}}{{end}}</main>
+</body>
+</html>{{end}}

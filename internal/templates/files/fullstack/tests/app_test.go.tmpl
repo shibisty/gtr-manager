@@ -1,0 +1,69 @@
+// Package tests holds the application's HTTP tests: each test gets a fresh
+// application on an in-memory SQLite database, migrated.
+package tests
+
+import (
+	"io"
+	"net/url"
+	"os"
+	"testing"
+
+	"fullstack"
+	apptest "fullstack-testing"
+
+	"{{.Name}}/bootstrap"
+)
+
+func newApp(t *testing.T) *fullstack.App {
+	t.Helper()
+	for k, v := range map[string]string{
+		"APP_NAME": "{{.Name}}", "APP_ENV": "testing",
+		"DB_DRIVER": "sqlite", "DATABASE_DSN": ":memory:", "DB_MIGRATE": "true",
+		"AUTH_JWT_SECRET": "a-test-secret-of-at-least-32-bytes!",
+	} {
+		t.Setenv(k, v)
+	}
+	app, err := bootstrap.NewApp(fullstack.Options{EnvFiles: []string{}, LogOutput: io.Discard})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Unsetenv("DB_MIGRATE") })
+	return app
+}
+
+func TestHome(t *testing.T) {
+	c := apptest.New(t, newApp(t))
+	c.Get("/").AssertOK().AssertSee("Welcome to {{.Name}}", "Log in")
+	c.Get("/dashboard").AssertRedirect("/login?redirect=%2Fdashboard")
+	c.GetJSON("/api/health").AssertOK().AssertJSONPath("status", "ok")
+}
+
+func TestRegisterAndLogin(t *testing.T) {
+	c := apptest.New(t, newApp(t))
+	c.Get("/register").AssertOK()
+	c.Post("/register", url.Values{"name": {"Ann"}, "email": {"ann@example.com"}, "password": {"short"}, "password_confirmation": {"short"}}).
+		AssertUnprocessable().AssertSee("at least 8 characters")
+	form := url.Values{"name": {"Ann"}, "email": {"Ann@Example.com"}, "password": {"secret-password"}, "password_confirmation": {"secret-password"}}
+	c.Post("/register", form).AssertRedirect("/dashboard")
+	c.Get("/dashboard").AssertOK().AssertSee("Hello, Ann (ann@example.com)")
+	c.Post("/logout", nil).AssertRedirect("/")
+	c.Get("/dashboard").AssertRedirect()
+
+	c.Post("/register", form).AssertUnprocessable().AssertSee("already been taken")
+	c.Post("/login", url.Values{"email": {"ann@example.com"}, "password": {"wrong-password"}}).AssertUnprocessable().AssertSee("do not match")
+	c.Post("/login?redirect=/dashboard", url.Values{"email": {"ann@example.com"}, "password": {"secret-password"}}).AssertRedirect("/dashboard")
+	c.Get("/login").AssertRedirect("/") // guests only
+}
+
+func TestAPIToken(t *testing.T) {
+	app := newApp(t)
+	c := apptest.New(t, app)
+	c.Get("/register")
+	c.Post("/register", url.Values{"name": {"Bo"}, "email": {"bo@example.com"}, "password": {"secret-password"}, "password_confirmation": {"secret-password"}})
+	c.GetJSON("/api/user").AssertUnauthorized()
+	r := c.PostJSON("/api/token", map[string]any{"email": "bo@example.com", "password": "secret-password"}).AssertOK()
+	token, _ := r.JSONPath("token")
+	c.WithToken(token.(string)).GetJSON("/api/user").AssertOK().AssertJSONPath("email", "bo@example.com")
+	c.PostJSON("/api/token", map[string]any{"email": "bo@example.com", "password": "nope"}).AssertUnauthorized()
+	c.PostJSON("/api/token", map[string]any{"email": "not-an-email"}).AssertUnprocessable().AssertJSONValidationErrors("email", "password")
+}

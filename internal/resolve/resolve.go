@@ -42,6 +42,7 @@ type Node struct {
 	Manifest  *manifest.Manifest
 	Deps      map[string]spec.Spec // its gtr dependencies (not devDependencies)
 	GoDeps    map[string]spec.Spec // its external Go module dependencies
+	NPMDeps   map[string]spec.Spec // its npm packages (node_modules)
 	Root      bool                 // a direct dependency of the project
 }
 
@@ -158,6 +159,12 @@ func (r *resolver) solve(pending []string) (bool, error) {
 		if !r.fits(name, c) {
 			continue
 		}
+		if c.Yanked {
+			// A yanked version stays for projects that locked it.
+			if e, ok := r.locked(name); !ok || e.Version != c.Version {
+				continue
+			}
+		}
 		m, err := r.manifest(name, s, c)
 		if errors.Is(err, source.ErrNoManifest) {
 			// An old tag from before the repository became a gtr package.
@@ -174,14 +181,18 @@ func (r *resolver) solve(pending []string) (bool, error) {
 		if err != nil {
 			return false, err
 		}
-		goDeps := map[string]spec.Spec{}
+		goDeps, npmDeps := map[string]spec.Spec{}, map[string]spec.Spec{}
 		for dn, ds := range deps {
-			if ds.Kind == spec.GoModule { // selected later by minimal version selection
+			switch ds.Kind {
+			case spec.GoModule: // selected later by minimal version selection
 				goDeps[dn] = ds
+				delete(deps, dn)
+			case spec.NPM: // installed into node_modules, after the gtr packages
+				npmDeps[dn] = ds
 				delete(deps, dn)
 			}
 		}
-		node := &Node{Name: name, Spec: s, Candidate: c, Manifest: m, Deps: deps, GoDeps: goDeps}
+		node := &Node{Name: name, Spec: s, Candidate: c, Manifest: m, Deps: deps, GoDeps: goDeps, NPMDeps: npmDeps}
 		by := name + "@" + c.Version
 		// Tentatively add the dependencies' ranges; fail fast if a decided
 		// package no longer fits.
@@ -466,7 +477,7 @@ func packageDeps(name, version string, from spec.Spec, m *manifest.Manifest) (ma
 	}
 	local := from.Kind == spec.File || from.Kind == spec.Workspace
 	for dn, dv := range all {
-		if err := spec.ValidateKey(dn); err != nil {
+		if err := spec.ValidateDep(dn, dv); err != nil {
 			return nil, fmt.Errorf("%s@%s: %w", name, version, err)
 		}
 		ds, err := spec.Parse(dn, dv)
