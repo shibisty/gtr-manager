@@ -10,6 +10,7 @@ import (
 	"gtr-manager/internal/gomodules"
 	"gtr-manager/internal/home"
 	"gtr-manager/internal/install"
+	"gtr-manager/internal/progress"
 	"gtr-manager/internal/source"
 	"gtr-manager/internal/stdlib"
 )
@@ -26,9 +27,16 @@ var (
 		if err != nil {
 			return nil, err
 		}
-		return &install.Installer{Dir: dir, Home: l, GitHub: source.NewGitHub(l.Tmp()), GitLab: source.NewGitLab(l.Tmp()),
+		in := &install.Installer{Dir: dir, Home: l, GitHub: source.NewGitHub(l.Tmp()), GitLab: source.NewGitLab(l.Tmp()),
 			Git: source.NewGit(filepath.Join(l.Root, "cache", "git"), l.Tmp()), SumDB: gomodules.NewSumDB(), Log: Stderr,
-			CheckName: CheckName}, nil
+			CheckName: CheckName}
+		// The phases with a status line in a terminal (one line per phase
+		// otherwise); not when Stderr is replaced (tests).
+		if f, ok := Stderr.(*os.File); ok && f == os.Stderr {
+			bar := progress.ForStderr()
+			in.Log, in.Progress = bar, bar
+		}
+		return in, nil
 	}
 )
 

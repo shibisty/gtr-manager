@@ -400,3 +400,25 @@ func TestWorkspaceScopedMembers(t *testing.T) {
 		}
 	}
 }
+
+// A member renamed after its workspace generated its go.mod: a project that
+// uses it through file: replaces that stale go.mod instead of refusing it.
+func TestRenamedMemberStaleGoMod(t *testing.T) {
+	p := newWorkspace(t)
+	if err := p.in.Install(ctx, Options{}); err != nil {
+		t.Fatal(err)
+	}
+	os.WriteFile(filepath.Join(p.dir, "drivers", "pg", "gtr.json"), []byte(`{"name":"@orm/pg","version":"0.1.0","dependencies":{"orm":"github:shibisty/orm.go#^0.1"}}`), 0o644)
+	app := newProject(t, p.gh, `{"name":"app","dependencies":{"@orm/pg":"file:`+filepath.ToSlash(filepath.Join(p.dir, "drivers", "pg"))+`"}}`)
+	if err := app.in.Install(ctx, Options{}); err != nil {
+		t.Fatal(err)
+	}
+	if mod := p.read("drivers/pg/go.mod"); !strings.Contains(mod, "module orm/pg\n") {
+		t.Fatal(mod)
+	}
+	// a go.mod edited by hand is still refused
+	os.WriteFile(filepath.Join(p.dir, "drivers", "pg", "go.mod"), []byte("module somebody-else\n\ngo 1.22\n"), 0o644)
+	if err := app.in.Install(ctx, Options{}); err == nil || !strings.Contains(err.Error(), "declares module") {
+		t.Fatal(err)
+	}
+}

@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+### Added
+- A progress line for `gtr install` (and `add`, `update`, `ci`, `sync`) in a terminal: the phase
+  (resolving, installing, Go modules, linking, writing go.mod), a bar or a counter and the
+  package at hand, with the log lines above it; the summary says how long it took. Without a
+  terminal (CI, pipes, `gtr mcp`) one line per phase. `GTR_PROGRESS=0` turns the line off,
+  `GTR_PROGRESS=1` forces it.
+
+### Fixed
+- A go.mod gtr generated for a workspace member that was renamed since is replaced, not
+  refused, when another project uses the member through `file:`.
+
 ## 0.1.6 — 2026-11-19
 
 ### Added

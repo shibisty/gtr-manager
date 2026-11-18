@@ -16,6 +16,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"gtr-manager/internal/gomod"
 	"gtr-manager/internal/gomodules"
@@ -24,6 +25,7 @@ import (
 	"gtr-manager/internal/lock"
 	"gtr-manager/internal/manifest"
 	"gtr-manager/internal/npm"
+	"gtr-manager/internal/progress"
 	"gtr-manager/internal/registry"
 	"gtr-manager/internal/resolve"
 	"gtr-manager/internal/semver"
@@ -58,6 +60,9 @@ type Installer struct {
 	GoProxy  *gomodules.Proxies // external Go modules; nil: from the environment
 	SumDB    *gomodules.SumDB   // checksum database; nil: no checks (tests)
 	Log      io.Writer          // progress and warnings (stderr)
+	// Progress shows the phases (resolving, downloading, …) as a status
+	// line; nil shows nothing. Install stops it (Stop) when it returns.
+	Progress progress.Reporter
 	// CheckName rejects names taken by the standard library (ADR-0002);
 	// nil skips the check.
 	CheckName func(name string) error
@@ -71,6 +76,7 @@ type Installer struct {
 	// (GTR_NPM_REGISTRY, GTR_NPM_TOKEN).
 	NPM *npm.Registry
 
+	started time.Time        // when Install began (the summary's duration)
 	ws      *workspaceSource // members of the workspace being installed
 	offline *storeSource     // gtr packages when Offline
 	logOnce sync.Once
@@ -156,6 +162,48 @@ func (l *lockedWriter) Write(p []byte) (int, error) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	return l.w.Write(p)
+}
+
+// progress is in.Progress, or a reporter that shows nothing.
+func (in *Installer) progress() progress.Reporter {
+	if in.Progress == nil {
+		return (*progress.Bar)(nil)
+	}
+	return in.Progress
+}
+
+// countingProviders reports every package the resolver looks up.
+func (in *Installer) countingProviders(pr progress.Reporter) resolve.Providers {
+	if in.Progress == nil {
+		return in.Providers
+	}
+	var seen sync.Map
+	return func(k spec.Kind) (source.Provider, error) {
+		p, err := in.Providers(k)
+		if err != nil {
+			return nil, err
+		}
+		return countingProvider{p, pr, &seen}, nil
+	}
+}
+
+type countingProvider struct {
+	source.Provider
+	pr   progress.Reporter
+	seen *sync.Map
+}
+
+func (p countingProvider) Candidates(ctx context.Context, name string, s spec.Spec) ([]source.Candidate, error) {
+	label := name
+	if label == "" {
+		label = s.Raw
+	}
+	p.pr.Start(label)
+	c, err := p.Provider.Candidates(ctx, name, s)
+	if _, dup := p.seen.LoadOrStore(label, true); !dup && err == nil {
+		p.pr.Done(label)
+	}
+	return c, err
 }
 
 // DefaultConcurrency is the number of parallel downloads.
@@ -275,6 +323,11 @@ func (in *Installer) Load() (*manifest.Manifest, error) {
 
 // Install installs everything gtr.json asks for.
 func (in *Installer) Install(ctx context.Context, opts Options) error {
+	if s, ok := in.Progress.(interface{ Stop() }); ok {
+		defer s.Stop()
+	}
+	in.started = time.Now()
+	pr := in.progress()
 	m := opts.Manifest
 	var err error
 	if m == nil {
@@ -353,7 +406,8 @@ func (in *Installer) Install(ctx context.Context, opts Options) error {
 			}
 		}
 	}
-	nodes, err := resolve.Resolve(ctx, in.Providers, resolve.Request{Root: gtrRoot, Lock: old, Update: opts.Update, Members: memberSpecs})
+	pr.Phase("Resolving", 0)
+	nodes, err := resolve.Resolve(ctx, in.countingProviders(pr), resolve.Request{Root: gtrRoot, Lock: old, Update: opts.Update, Members: memberSpecs})
 	if err != nil {
 		return err
 	}
@@ -392,11 +446,14 @@ func (in *Installer) Install(ctx context.Context, opts Options) error {
 	// on timing.
 	var mu sync.Mutex
 	dirs := map[string]string{}
+	pr.Phase("Installing", len(installed(nodes)))
 	err = parallel(ctx, in.concurrency(), sortedNames(installed(nodes)), func(ctx context.Context, name string) error {
+		pr.Start(name)
 		dir, entry, err := in.materialize(ctx, nodes[name], old.Packages[name])
 		if err != nil {
 			return err
 		}
+		pr.Done(name + "@" + entry.Version)
 		mu.Lock()
 		dirs[name] = dir
 		newLock.Packages[name] = entry
@@ -407,11 +464,16 @@ func (in *Installer) Install(ctx context.Context, opts Options) error {
 		return err
 	}
 	goDirs := map[string]string{}
+	if len(mods.Versions) > 0 {
+		pr.Phase("Go modules", len(mods.Versions))
+	}
 	err = parallel(ctx, in.concurrency(), sortedKeys(mods.Versions), func(ctx context.Context, p string) error {
+		pr.Start(p)
 		dir, entry, err := in.fetchGo(ctx, mods, p, old.Packages[p], opts.Update)
 		if err != nil {
 			return err
 		}
+		pr.Done(p + "@" + mods.Versions[p])
 		mu.Lock()
 		goDirs[p] = dir
 		newLock.Packages[p] = entry
@@ -436,6 +498,7 @@ func (in *Installer) Install(ctx context.Context, opts Options) error {
 			return err
 		}
 	}
+	pr.Phase("Linking", 0)
 	if err := in.linkAll(dirs, old); err != nil {
 		return err
 	}
@@ -457,6 +520,7 @@ func (in *Installer) Install(ctx context.Context, opts Options) error {
 			return err
 		}
 	}
+	pr.Phase("Writing go.mod", 0)
 	if len(members) > 0 {
 		if err := in.writeWorkspace(m, root, nodes, mods, members); err != nil {
 			return err
@@ -707,12 +771,16 @@ func writePackageGoMod(dir, name string, content []byte) error {
 	// A go.mod a workspace generated for this directory (it is a member
 	// there) is kept: rewriting it with versioned requirements on other
 	// members would break that workspace, and it serves here as well.
-	if st, _ := gomod.Check(path); st == gomod.Generated || st == gomod.Edited {
+	st, _ := gomod.Check(path)
+	if st == gomod.Generated || st == gomod.Edited {
 		if mod, err := gomod.ModulePath(path); err == nil && mod == name {
 			return nil
 		}
 	}
-	if _, err := os.Stat(path); err == nil && !gomod.IsPackageGenerated(path) {
+	// A go.mod gtr generated for a workspace before the package was renamed
+	// ("passport-local" → "@passport/local") is stale, not the author's: it is
+	// replaced. One edited by hand is not.
+	if _, err := os.Stat(path); err == nil && st != gomod.Generated && !gomod.IsPackageGenerated(path) {
 		mod, err := gomod.ModulePath(path)
 		if err != nil {
 			return err
@@ -1060,7 +1128,11 @@ func (in *Installer) summary(old, cur *lock.Lock) {
 	if len(cur.Packages) == 1 {
 		noun = "package"
 	}
-	fmt.Fprintf(in.log(), "%d %s installed (%d added, %d updated, %d removed)\n", len(cur.Packages), noun, added, changed, removed)
+	took := ""
+	if in.Progress != nil && !in.started.IsZero() {
+		took = fmt.Sprintf(" in %.1fs", time.Since(in.started).Seconds())
+	}
+	fmt.Fprintf(in.log(), "%d %s installed (%d added, %d updated, %d removed)%s\n", len(cur.Packages), noun, added, changed, removed, took)
 }
 
 func sortedNames(m map[string]*resolve.Node) []string { return sortedKeys(m) }
