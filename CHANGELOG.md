@@ -3,6 +3,16 @@
 ## Unreleased
 
 ### Added
+- Scoped package names (ADR-0012): `@orm/postgres`, imported as `orm/postgres` (go.mod and
+  go.work have the import path, gtr.json the name). Linked at `gtr_modules/@orm/postgres`,
+  stored as `@orm+postgres@<version>-<hash8>`; `gtr add @orm/postgres[@range]`,
+  `gtr yank @orm/postgres@0.1.0`; `gtr build` names a scoped program after its last part.
+- `gtr publish -r`: publishes every workspace member that is not private and whose version
+  the registry does not have yet, dependencies first, skipping published ones.
+- Publishing to the registry from a workspace turns `workspace:` ranges and `file:` paths to
+  members into registry ranges in the archive's gtr.json (`workspace:^` → `^1.2.3`, as pnpm);
+  the member's own gtr.json is not changed. Paths outside the workspace and private members
+  are refused.
 - The gtr registry: `"greet": "^0.1"` (or `gtr add greet`) installs from it: versions and their
   gtr.json from the package index, archives checked against their SHA-256, `registry:<url>` and
   the checksum in gtr.lock, yanked versions skipped unless locked, `--offline` from the store.

@@ -14,6 +14,7 @@ import (
 
 	"gtr-manager/internal/install"
 	"gtr-manager/internal/registry"
+	"gtr-manager/internal/spec"
 )
 
 // publishToRegistry packs the package and uploads it.
@@ -29,11 +30,6 @@ func publishToRegistry(p pkgDir, c *registry.Client, dryRun, skipTests, allowDir
 			return fmt.Errorf("the repository has uncommitted changes (--allow-dirty to publish them anyway):\n  %s", strings.Join(firstN(d, 8), "\n  "))
 		}
 		step("the repository is clean")
-	}
-	if links, err := install.LoadLinks(filepath.Join(root(p.Dir), filepath.FromSlash(install.LinksFile))); err != nil {
-		return err
-	} else if len(links) > 0 {
-		return errors.New("packages are linked to local copies (gtr link): the tests would not test what others install; run `gtr unlink` first")
 	}
 	if !dryRun {
 		ctx, stop := signalContext()
@@ -52,17 +48,51 @@ func publishToRegistry(p pkgDir, c *registry.Client, dryRun, skipTests, allowDir
 		}
 		step("%s does not have %s %s yet", c.URL, p.M.Name, p.M.Version)
 	}
+	members, err := workspaceMembers(p.Dir)
+	if err != nil {
+		return err
+	}
+	return publishOne(p, c, members, dryRun, skipTests)
+}
+
+// publishOne checks, tests, packs and uploads one package; the registry is
+// known not to have its version.
+func publishOne(p pkgDir, c *registry.Client, members map[string]*install.Member, dryRun, skipTests bool) error {
+	step := func(format string, a ...any) { fmt.Fprintf(Stderr, "✓ "+format+"\n", a...) }
+	if err := spec.ValidateName(p.M.Name); err != nil {
+		return fmt.Errorf("gtr.json: %w", err)
+	}
+	if links, err := install.LoadLinks(filepath.Join(root(p.Dir), filepath.FromSlash(install.LinksFile))); err != nil {
+		return err
+	} else if len(links) > 0 {
+		return errors.New("packages are linked to local copies (gtr link): the tests would not test what others install; run `gtr unlink` first")
+	}
+	release, changed, bad, err := releaseManifest(p, members)
+	if err != nil {
+		return err
+	}
+	if len(bad) > 0 {
+		return fmt.Errorf("these dependencies are only reachable here, so nobody could install the package:\n  %s\nuse a registry range (\"^0.1\"), a member of this workspace (\"workspace:^\") or a published source (\"github:owner/repo#^0.1\")", strings.Join(bad, "\n  "))
+	}
+	for _, ch := range changed {
+		step("gtr.json in the archive: %s", ch)
+	}
 	if skipTests {
 		fmt.Fprintln(Stderr, "- tests skipped (--skip-tests)")
 	} else if err := publishTests(p); err != nil {
 		return err
 	}
 
+	_, gitErr := findRepo(p.Dir)
 	files, err := packageFiles(p.Dir, gitErr == nil)
 	if err != nil {
 		return err
 	}
-	archive, err := registry.Pack(p.Dir, files)
+	var contents map[string][]byte
+	if release != nil {
+		contents = map[string][]byte{"gtr.json": release}
+	}
+	archive, err := registry.PackWith(p.Dir, files, contents)
 	if err != nil {
 		return err
 	}

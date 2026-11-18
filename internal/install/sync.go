@@ -103,7 +103,7 @@ func carryOver(m *manifest.Manifest, f gomod.File, l *lock.Lock, foreign bool) (
 		}
 		return nil
 	}
-	if f.Module != "" && f.Module != m.Name && !foreign {
+	if f.Module != "" && f.Module != spec.Module(m.Name) && !foreign {
 		problems = append(problems, fmt.Sprintf("module %s: the module path comes from \"name\" in gtr.json (%s); change it there", f.Module, m.Name))
 	}
 	for _, d := range f.Unsupported {
@@ -111,6 +111,11 @@ func carryOver(m *manifest.Manifest, f gomod.File, l *lock.Lock, foreign bool) (
 	}
 	required := map[string]bool{}
 	for _, r := range f.Require {
+		// go.mod has module paths: a scoped package "@orm/postgres" is
+		// required as "orm/postgres" (ADR-0012).
+		if name, ok := spec.PackageOfModule(r.Path); ok && !spec.IsGoModule(r.Path) {
+			r.Path = name
+		}
 		required[r.Path] = true
 		if r.Indirect { // gtr recomputes the indirect requirements itself
 			continue
@@ -147,18 +152,22 @@ func carryOver(m *manifest.Manifest, f gomod.File, l *lock.Lock, foreign bool) (
 			// A package installed for another package; go mod tidy lists
 			// what the project imports directly. Its source is known.
 		default:
-			if _, local := f.Replace[r.Path]; !local {
+			if _, local := f.Replace[spec.Module(r.Path)]; !local {
 				problems = append(problems, fmt.Sprintf("%s: a gtr package needs a source; add it with `gtr add github:owner/repo` or `gtr add file:../path`", r.Path))
 			}
 		}
 	}
-	for _, p := range sortedKeys(f.Replace) {
-		target, version := gomod.ReplaceTarget(f.Replace[p])
+	for _, mp := range sortedKeys(f.Replace) {
+		target, version := gomod.ReplaceTarget(f.Replace[mp])
+		p := mp
+		if name, ok := spec.PackageOfModule(mp); ok && !spec.IsGoModule(mp) {
+			p = name
+		}
 		if target == "" || strings.HasPrefix(target, "./"+ModulesDir+"/") {
 			continue // generated
 		}
 		if !isLocalPath(target) || version != "" {
-			problems = append(problems, fmt.Sprintf("replace %s => %s: replacing a module with another module is not supported", p, f.Replace[p]))
+			problems = append(problems, fmt.Sprintf("replace %s => %s: replacing a module with another module is not supported", mp, f.Replace[mp]))
 			continue
 		}
 		if spec.IsGoModule(p) {

@@ -80,7 +80,42 @@ func TestNPM(t *testing.T) {
 	if _, err := Parse("preact", "npm:>=one"); err == nil {
 		t.Fatal("bad range")
 	}
-	if ValidateDep("@preact/signals", "npm:^1") != nil || ValidateDep("@preact/signals", "^1") == nil || ValidateDep("orm", "github:a/b") != nil {
+	if ValidateDep("@preact/signals", "npm:^1") != nil || ValidateDep("@preact.js/signals", "^1") == nil || ValidateDep("orm", "github:a/b") != nil {
 		t.Fatal("ValidateDep")
+	}
+}
+
+func TestScopedNames(t *testing.T) {
+	for _, ok := range []string{"@orm/postgres", "@passport/facebook", "@ab/cd", "orm"} {
+		if err := ValidateName(ok); err != nil {
+			t.Errorf("%s: %v", ok, err)
+		}
+		if err := ValidateKey(ok); err != nil {
+			t.Errorf("key %s: %v", ok, err)
+		}
+	}
+	for _, bad := range []string{"@orm", "@orm/", "@/x", "@Orm/x", "@orm/x/y", "@orm/internal", "@go/x", "@o/postgres", "orm/postgres", "@orm.go/x"} {
+		if ValidateName(bad) == nil {
+			t.Errorf("%s accepted", bad)
+		}
+	}
+	if Module("@orm/postgres") != "orm/postgres" || Module("orm") != "orm" {
+		t.Fatal("Module")
+	}
+	for in, want := range map[string]string{"orm/postgres": "@orm/postgres", "orm": "orm"} {
+		if got, ok := PackageOfModule(in); !ok || got != want {
+			t.Errorf("PackageOfModule(%s) = %s %v", in, got, ok)
+		}
+	}
+	if _, ok := PackageOfModule("github.com/x/y"); ok {
+		t.Error("a Go module is no package")
+	}
+	for in, want := range map[string][2]string{"@orm/postgres@^0.1": {"@orm/postgres", "^0.1"}, "@orm/postgres": {"@orm/postgres", ""}, "faker@1.0.0": {"faker", "1.0.0"}} {
+		if n, v, _ := SplitVersion(in); n != want[0] || v != want[1] {
+			t.Errorf("SplitVersion(%s) = %s %s", in, n, v)
+		}
+	}
+	if FileName("@orm/postgres") != "@orm+postgres" {
+		t.Error("FileName")
 	}
 }

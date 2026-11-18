@@ -60,12 +60,14 @@ func (s *storeSource) scan() {
 		if !e.IsDir() {
 			continue
 		}
-		at := strings.Index(e.Name(), "@")
+		// <name>@<version>-<hash8>; a scoped name starts with "@" and has
+		// "+" for "/" (store.Dir).
+		at := strings.Index(e.Name()[min(1, len(e.Name())):], "@") + min(1, len(e.Name()))
 		dash := strings.LastIndex(e.Name(), "-")
 		if at <= 0 || dash <= at {
 			continue
 		}
-		name, version, hash8 := e.Name()[:at], e.Name()[at+1:dash], e.Name()[dash+1:]
+		name, version, hash8 := strings.ReplaceAll(e.Name()[:at], "+", "/"), e.Name()[at+1:dash], e.Name()[dash+1:]
 		if _, err := semver.Parse(version); err != nil {
 			continue
 		}

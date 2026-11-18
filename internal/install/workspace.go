@@ -347,7 +347,7 @@ func (in *Installer) writeWorkspace(m *manifest.Manifest, rootDeps map[string]sp
 		work.Use = append(work.Use, "./"+dir)
 	}
 	for name := range installed(nodes) {
-		work.Replace[name] = "./" + ModulesDir + "/" + name
+		work.Replace[spec.Module(name)] = "./" + ModulesDir + "/" + name
 	}
 	for _, mp := range sortedKeys(mods.Versions) {
 		dn, err := gomodules.DirName(mp, mods.Versions[mp])
@@ -395,10 +395,10 @@ func (in *Installer) writeWorkspace(m *manifest.Manifest, rootDeps map[string]sp
 	}
 	module := func(dir, name string, direct map[string]bool) error {
 		need := closure(direct)
-		p := gomod.Project{Module: name, Go: goVer, Replace: map[string]string{}}
+		p := gomod.Project{Module: spec.Module(name), Go: goVer, Replace: map[string]string{}}
 		for _, dn := range sortedNames(nodes) {
 			n := nodes[dn]
-			r := gomod.Require{Path: dn, Version: "v" + n.Candidate.Version}
+			r := gomod.Require{Path: spec.Module(dn), Version: "v" + n.Candidate.Version}
 			switch {
 			case n.Spec.Kind == spec.Workspace || !need[dn]:
 				// Members come from go.work's use; a versioned requirement on

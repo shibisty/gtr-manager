@@ -12,6 +12,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"sort"
 	"strings"
 	"sync"
@@ -161,7 +162,13 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 	s.mu.Lock()
 	s.Requests = append(s.Requests, r.Method+" "+r.URL.Path)
 	s.mu.Unlock()
-	parts := strings.Split(strings.TrimPrefix(r.URL.Path, "/api/v1/"), "/")
+	// Split the escaped path: a scoped name is one segment ("@orm%2Fpostgres").
+	parts := strings.Split(strings.TrimPrefix(r.URL.EscapedPath(), "/api/v1/"), "/")
+	for i, p := range parts {
+		if u, err := url.PathUnescape(p); err == nil {
+			parts[i] = u
+		}
+	}
 	switch {
 	case r.Method == "POST" && r.URL.Path == "/api/v1/tokens":
 		var in struct{ Email, Password string }

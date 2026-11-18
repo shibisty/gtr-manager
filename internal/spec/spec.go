@@ -4,10 +4,12 @@
 //	"orm-mysql": "github:shibisty/orm.go/drivers/mysql#^0.1"  monorepo subdirectory
 //	"passport":  "file:../passport.go"                  local directory, not copied
 //	"faker":     "^0.1"                                 the gtr registry
+//	"@orm/postgres": "^0.1"                             a scoped registry package, imported as "orm/postgres"
 //	"github.com/go-sql-driver/mysql": "^1.10"           an external Go module
 //	"preact":    "npm:^10.19"                           an npm package for the frontend (node_modules)
 //
-// The key is always the import path.
+// The key is the import path, except that a scoped package name keeps its
+// "@" ("@orm/postgres" is imported as "orm/postgres", see Module).
 package spec
 
 import (
@@ -68,6 +70,9 @@ func IsGoModule(key string) bool {
 
 // ValidateKey checks a dependency key (ADR-0002, ADR-0003).
 func ValidateKey(key string) error {
+	if strings.HasPrefix(key, "@") {
+		return ValidateName(key)
+	}
 	if IsGoModule(key) {
 		if !goModuleRe.MatchString(key) {
 			return fmt.Errorf("invalid Go module path %q", key)
@@ -77,16 +82,72 @@ func ValidateKey(key string) error {
 	return ValidateName(key)
 }
 
-// ValidateName checks a gtr package name.
+// ValidateName checks a gtr package name: "orm", or a scoped name
+// "@orm/postgres" (ADR-0012). Each part is lowercase letters, digits and
+// single hyphens, starting with a letter; the whole name is 2–64 characters.
 func ValidateName(name string) error {
+	if scope, rest, ok := SplitScope(name); ok {
+		if len(name) > 64 || !validPart(scope) || !validPart(rest) {
+			return fmt.Errorf("invalid package name %q: @scope/name, each part lowercase letters, digits and single hyphens starting with a letter, 64 characters in all", name)
+		}
+		for _, part := range []string{scope, rest} {
+			if reserved[part] {
+				return fmt.Errorf("package name %q: %q is reserved", name, part)
+			}
+		}
+		return nil
+	}
 	if len(name) < 2 || len(name) > 64 || !nameRe.MatchString(name) {
-		return fmt.Errorf("invalid package name %q: lowercase letters, digits and single hyphens, 2–64 characters, starting with a letter", name)
+		return fmt.Errorf("invalid package name %q: lowercase letters, digits and single hyphens, 2–64 characters, starting with a letter (or @scope/name)", name)
 	}
 	if reserved[name] {
 		return fmt.Errorf("package name %q is reserved", name)
 	}
 	return nil
 }
+
+func validPart(s string) bool { return len(s) >= 2 && nameRe.MatchString(s) }
+
+// SplitScope splits a scoped name "@orm/postgres" into "orm" and
+// "postgres"; ok is false for an unscoped name.
+func SplitScope(name string) (scope, rest string, ok bool) {
+	if !strings.HasPrefix(name, "@") {
+		return "", "", false
+	}
+	scope, rest, ok = strings.Cut(name[1:], "/")
+	return scope, rest, ok
+}
+
+// Module is the Go module (and import) path of a gtr package: its name,
+// without the "@" of a scope ("@orm/postgres" → "orm/postgres"). Go import
+// paths cannot contain "@" (ADR-0012).
+func Module(name string) string { return strings.TrimPrefix(name, "@") }
+
+// PackageOfModule is the inverse of Module for a module path found in a
+// go.mod: "orm/postgres" → "@orm/postgres", "orm" → "orm". ok is false for
+// paths that are no gtr package name.
+func PackageOfModule(path string) (string, bool) {
+	if ValidateName(path) == nil {
+		return path, true
+	}
+	if strings.Count(path, "/") == 1 && ValidateName("@"+path) == nil {
+		return "@" + path, true
+	}
+	return "", false
+}
+
+// SplitVersion splits "name@version" (or "@scope/name@range"): the "@" of
+// a scope is not a separator.
+func SplitVersion(arg string) (name, version string, ok bool) {
+	if i := strings.LastIndex(arg, "@"); i > 0 {
+		return arg[:i], arg[i+1:], true
+	}
+	return arg, "", false
+}
+
+// FileName is a package name usable as one path element ("@orm/postgres" →
+// "@orm+postgres"), for store directories and archive names.
+func FileName(name string) string { return strings.ReplaceAll(name, "/", "+") }
 
 // ValidateDep checks the key of a dependency with its value: npm packages
 // ("npm:...") have npm names ("@preact/signals"), the others are import

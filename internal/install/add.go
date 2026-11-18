@@ -119,7 +119,7 @@ func (in *Installer) parseAdd(ctx context.Context, arg string) (name, value stri
 // parseAddRegistry handles `gtr add orm[@range]`: a package of the gtr
 // registry, added as ^<latest version> without a range.
 func (in *Installer) parseAddRegistry(ctx context.Context, arg string) (string, string, error) {
-	name, rng, _ := strings.Cut(arg, "@")
+	name, rng, _ := spec.SplitVersion(arg)
 	if err := spec.ValidateName(name); err != nil {
 		return "", "", fmt.Errorf("%s: %w; add other packages by their source, e.g. `gtr add github:owner/repo`", arg, err)
 	}

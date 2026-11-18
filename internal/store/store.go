@@ -1,6 +1,7 @@
 // Package store keeps downloaded packages in ~/.gtr/store (ADR-0005).
 //
-// A package directory store/gtr/<name>@<version>-<hash8> appears in one
+// A package directory store/gtr/<name>@<version>-<hash8> (a scoped name
+// "@orm/postgres" as "@orm+postgres") appears in one
 // rename from a temporary directory and is never modified afterwards.
 // <hash8> comes from the h1 integrity hash of the downloaded tree, so two
 // different trees for the same version (a moved tag) never mix.
@@ -27,7 +28,8 @@ type Store struct {
 
 // Dir returns the directory of a package with a known integrity.
 func (s *Store) Dir(name, version, integrity string) string {
-	return filepath.Join(s.Root, "gtr", fmt.Sprintf("%s@%s-%s", name, version, dirhash.Short(integrity)))
+	// A scoped name keeps its "@" and gets "+" for "/": "@orm+postgres@0.1.0-…".
+	return filepath.Join(s.Root, "gtr", fmt.Sprintf("%s@%s-%s", strings.ReplaceAll(name, "/", "+"), version, dirhash.Short(integrity)))
 }
 
 // Has reports whether the package is in the store.

@@ -22,6 +22,8 @@ import (
 //	gtr publish --dry-run      only the checks (and the files of the archive)
 //	gtr publish --skip-tests   without running the tests
 //	gtr publish --remote up    another remote (git)
+//	gtr publish -r             every member of the workspace the registry does
+//	                           not have yet, dependencies first (ADR-0012)
 //
 // To the registry, the package's files (those git does not ignore, without
 // generated go.mod, gtr_modules, build output) go up as a .tar.gz; a
@@ -30,7 +32,8 @@ import (
 //
 // Checks: gtr.json has a name and a SemVer version and is not private;
 // dependencies have no file: or workspace: sources (nobody else can
-// install them); the repository is clean; the version tag exists and points
+// install them) — to the registry, those on members of the workspace become
+// version ranges in the archive's gtr.json; the repository is clean; the version tag exists and points
 // at HEAD; the tests pass (with the coverage threshold of gtr.json); the
 // remote does not have the tag yet.
 func Publish(args []string) error {
@@ -38,10 +41,12 @@ func Publish(args []string) error {
 	if err != nil {
 		return err
 	}
-	dryRun, skipTests, remote, useGit, allowDirty := false, false, "origin", false, false
+	dryRun, skipTests, remote, useGit, allowDirty, recursive := false, false, "origin", false, false, false
 	for i := 0; i < len(args); i++ {
 		a := args[i]
 		switch {
+		case a == "-r" || a == "--recursive":
+			recursive = true
 		case a == "--git":
 			useGit = true
 		case a == "--allow-dirty":
@@ -56,8 +61,14 @@ func Publish(args []string) error {
 		case strings.HasPrefix(a, "--remote="):
 			remote = strings.TrimPrefix(a, "--remote=")
 		default:
-			return fmt.Errorf("unknown argument %q; usage: gtr publish [--registry <url> | --git] [--dry-run] [--skip-tests] [--remote origin]", a)
+			return fmt.Errorf("unknown argument %q; usage: gtr publish [-r] [--registry <url> | --git] [--dry-run] [--skip-tests] [--remote origin]", a)
 		}
+	}
+	if recursive {
+		if useGit {
+			return errors.New("gtr publish -r publishes to the registry; for git tags, run gtr publish --git in each member")
+		}
+		return publishWorkspace(clientFor(regURL), dryRun, skipTests, allowDirty)
 	}
 	pkgs, err := packages(false)
 	if err != nil {
@@ -78,17 +89,18 @@ func Publish(args []string) error {
 	if string(p.M.Raw("private")) == "true" {
 		return errors.New(`gtr.json has "private": true; remove it to publish`)
 	}
+	if !useGit {
+		c := clientFor(regURL)
+		if regURL != "" || c.Token != "" {
+			step("gtr.json: %s %s", p.M.Name, p.M.Version)
+			return publishToRegistry(p, c, dryRun, skipTests, allowDirty, step)
+		}
+	}
+	// A git tag is installed as it is: local sources cannot be rewritten.
 	if bad := localDeps(p); len(bad) > 0 {
 		return fmt.Errorf("these dependencies are only reachable here, so nobody could install the package:\n  %s\nuse a published source such as \"github:owner/repo/subdir#^0.1\"", strings.Join(bad, "\n  "))
 	}
 	step("gtr.json: %s %s", p.M.Name, p.M.Version)
-
-	if !useGit {
-		c := clientFor(regURL)
-		if regURL != "" || c.Token != "" {
-			return publishToRegistry(p, c, dryRun, skipTests, allowDirty, step)
-		}
-	}
 
 	repo, err := findRepo(p.Dir)
 	if err != nil {

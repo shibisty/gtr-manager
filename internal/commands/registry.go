@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"gtr-manager/internal/registry"
+	"gtr-manager/internal/spec"
 )
 
 func signalContext() (context.Context, context.CancelFunc) {
@@ -249,7 +250,7 @@ func Yank(args []string, undo bool) error {
 			return errors.New("usage: gtr yank <name>@<version> [--undo]")
 		}
 	}
-	name, version, ok := strings.Cut(target, "@")
+	name, version, ok := spec.SplitVersion(target)
 	if !ok || name == "" || version == "" {
 		return errors.New("usage: gtr yank <name>@<version> [--undo]")
 	}

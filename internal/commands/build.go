@@ -14,6 +14,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
 	"regexp"
 	"runtime"
@@ -24,6 +25,7 @@ import (
 	"time"
 
 	"gtr-manager/internal/manifest"
+	"gtr-manager/internal/spec"
 )
 
 // buildConfig is the "build" block of gtr.json.
@@ -244,7 +246,7 @@ func buildPackage(ctx context.Context, p pkgDir, o buildOptions) error {
 	}
 	output := c.Output
 	if output == "" {
-		output = p.M.Name
+		output = path.Base(spec.Module(p.M.Name)) // "@acme/tool" builds "tool"
 	}
 	outDir := o.outDir
 	if outDir == "" {

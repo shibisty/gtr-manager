@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -615,7 +616,7 @@ func (in *Installer) materialize(ctx context.Context, n *resolve.Node, prev lock
 			entry.Dependencies[dn] = ds.Raw
 		}
 	}
-	goMod := gomod.Package(n.Name, gomod.GoDirective(n.Manifest.Engines.Go, DefaultGo), packageRequires(n))
+	goMod := gomod.Package(spec.Module(n.Name), gomod.GoDirective(n.Manifest.Engines.Go, DefaultGo), packageRequires(n))
 	for dn, ds := range n.GoDeps {
 		if entry.Dependencies == nil {
 			entry.Dependencies = map[string]string{}
@@ -683,11 +684,11 @@ func sourceString(s spec.Spec) string {
 func packageRequires(n *resolve.Node) []gomod.Require {
 	var reqs []gomod.Require
 	for _, dn := range sortedKeys(n.Deps) {
-		reqs = append(reqs, gomod.Require{Path: dn, Version: placeholder})
+		reqs = append(reqs, gomod.Require{Path: spec.Module(dn), Version: placeholder})
 	}
 	for _, pn := range sortedKeys(n.Manifest.PeerDependencies) {
 		if _, dup := n.Deps[pn]; !dup && !spec.IsGoModule(pn) {
-			reqs = append(reqs, gomod.Require{Path: pn, Version: placeholder})
+			reqs = append(reqs, gomod.Require{Path: spec.Module(pn), Version: placeholder})
 		}
 	}
 	// External modules: the lowest version the range admits (a /vN path
@@ -701,6 +702,7 @@ func packageRequires(n *resolve.Node) []gomod.Require {
 // writePackageGoMod writes the generated go.mod into a file: package. A
 // go.mod the author wrote is kept if it declares the right module path.
 func writePackageGoMod(dir, name string, content []byte) error {
+	name = spec.Module(name) // the module path
 	path := filepath.Join(dir, "go.mod")
 	// A go.mod a workspace generated for this directory (it is a member
 	// there) is kept: rewriting it with versioned requirements on other
@@ -731,7 +733,7 @@ func writePackageGoMod(dir, name string, content []byte) error {
 func (in *Installer) linkAll(dirs map[string]string, old *lock.Lock) error {
 	base := in.path(ModulesDir)
 	for _, name := range sortedKeys(dirs) {
-		l := filepath.Join(base, name)
+		l := filepath.Join(base, filepath.FromSlash(name))
 		if t := link.Target(l); t != "" && filepath.Clean(t) == filepath.Clean(dirs[name]) {
 			continue
 		}
@@ -756,11 +758,30 @@ func (in *Installer) linkAll(dirs map[string]string, old *lock.Lock) error {
 			known[filepath.Clean(in.file().Dir(spec.Spec{Path: strings.TrimPrefix(e.Source, "file:")}))] = true
 		}
 	}
+	// Scoped packages are links inside a plain directory per scope
+	// (gtr_modules/@orm/postgres, ADR-0012).
+	var names []string
+	var scopes []string
 	for _, e := range entries {
-		if _, keep := dirs[e.Name()]; keep || strings.HasPrefix(e.Name(), ".") {
+		p := filepath.Join(base, e.Name())
+		if strings.HasPrefix(e.Name(), "@") && link.Target(p) == "" && !link.IsCopy(p) && e.IsDir() {
+			scopes = append(scopes, p)
+			inner, err := os.ReadDir(p)
+			if err != nil {
+				return err
+			}
+			for _, ie := range inner {
+				names = append(names, e.Name()+"/"+ie.Name())
+			}
 			continue
 		}
-		p := filepath.Join(base, e.Name())
+		names = append(names, e.Name())
+	}
+	for _, name := range names {
+		if _, keep := dirs[name]; keep || strings.HasPrefix(path.Base(name), ".") {
+			continue
+		}
+		p := filepath.Join(base, filepath.FromSlash(name))
 		t := link.Target(p)
 		ours := link.IsCopy(p) || t != "" && (within(storeRoot, t) || known[filepath.Clean(t)])
 		if !ours {
@@ -770,6 +791,9 @@ func (in *Installer) linkAll(dirs map[string]string, old *lock.Lock) error {
 		if err := link.Remove(p); err != nil {
 			return err
 		}
+	}
+	for _, sd := range scopes {
+		os.Remove(sd) // only when empty
 	}
 	return nil
 }
@@ -893,19 +917,19 @@ func goLanguage(v string) string {
 }
 
 func (in *Installer) writeGoMod(m *manifest.Manifest, nodes map[string]*resolve.Node, mods *gomodules.Result, goRoot map[string]spec.Spec) error {
-	module := m.Name
+	module := spec.Module(m.Name)
 	if module == "" {
 		module = filepath.Base(in.Dir)
 	}
 	p := gomod.Project{Module: module, Go: goDirective(m, nodes, mods), Replace: map[string]string{}}
 	for _, name := range sortedNames(nodes) {
-		r := gomod.Require{Path: name, Version: "v" + nodes[name].Candidate.Version}
+		r := gomod.Require{Path: spec.Module(name), Version: "v" + nodes[name].Candidate.Version}
 		if nodes[name].Root {
 			p.Direct = append(p.Direct, r)
 		} else {
 			p.Indirect = append(p.Indirect, r)
 		}
-		p.Replace[name] = "./" + ModulesDir + "/" + name
+		p.Replace[spec.Module(name)] = "./" + ModulesDir + "/" + name
 	}
 	for _, mp := range sortedKeys(mods.Versions) {
 		r := gomod.Require{Path: mp, Version: mods.Versions[mp]}

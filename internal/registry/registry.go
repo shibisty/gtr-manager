@@ -357,14 +357,21 @@ func Extract(archive io.Reader, dst string) error {
 }
 
 // Pack makes a package archive of files (slash paths relative to dir).
-func Pack(dir string, files []string) ([]byte, error) {
+func Pack(dir string, files []string) ([]byte, error) { return PackWith(dir, files, nil) }
+
+// PackWith is Pack with some files' contents given instead of read from dir
+// (the gtr.json `gtr publish` rewrites).
+func PackWith(dir string, files []string, contents map[string][]byte) ([]byte, error) {
 	var b bytes.Buffer
 	gz, _ := gzip.NewWriterLevel(&b, gzip.BestCompression)
 	tw := tar.NewWriter(gz)
 	for _, f := range files {
-		data, err := os.ReadFile(filepath.Join(dir, filepath.FromSlash(f)))
-		if err != nil {
-			return nil, err
+		data, given := contents[f]
+		if !given {
+			var err error
+			if data, err = os.ReadFile(filepath.Join(dir, filepath.FromSlash(f))); err != nil {
+				return nil, err
+			}
 		}
 		// fixed metadata: the same files give the same archive
 		if err := tw.WriteHeader(&tar.Header{Name: f, Mode: 0o644, Size: int64(len(data)), Typeflag: tar.TypeReg,

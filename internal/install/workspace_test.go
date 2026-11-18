@@ -364,3 +364,39 @@ func TestWorkspaceRootWithoutCode(t *testing.T) {
 		t.Fatal("hand-written go.mod changed")
 	}
 }
+
+// TestWorkspaceScopedMembers: a monorepo whose members are "orm" and
+// "@orm/postgres" (ADR-0012). The member's go.mod declares "orm/postgres",
+// and the root imports it under that path.
+func TestWorkspaceScopedMembers(t *testing.T) {
+	p := newProject(t, universe(t), `{"name":"orm-dev","version":"0.0.0","private":true,"workspaces":["core","drivers/*"]}`)
+	files := map[string]string{
+		"core/gtr.json":              `{"name":"orm","version":"0.2.0","engines":{"go":">=1.22"}}`,
+		"core/orm.go":                "package orm\n\nconst Name = \"orm\"\n",
+		"drivers/postgres/gtr.json":  `{"name":"@orm/postgres","version":"0.1.0","dependencies":{"orm":"workspace:^"}}`,
+		"drivers/postgres/driver.go": "package postgres\n\nimport \"orm\"\n\nconst Driver = orm.Name + \"/postgres\"\n",
+		"main.go":                    "package main\n\nimport \"orm/postgres\"\n\nfunc main() { println(postgres.Driver) }\n",
+	}
+	for name, body := range files {
+		path := filepath.Join(p.dir, filepath.FromSlash(name))
+		os.MkdirAll(filepath.Dir(path), 0o755)
+		os.WriteFile(path, []byte(body), 0o644)
+	}
+	if err := p.in.Install(ctx, Options{}); err != nil {
+		t.Fatal(err, p.log.String())
+	}
+	if mod := p.read("drivers/postgres/go.mod"); !strings.Contains(mod, "module orm/postgres\n") {
+		t.Fatal(mod)
+	}
+	if work := p.read("go.work"); !strings.Contains(work, "./drivers/postgres") {
+		t.Fatal(work)
+	}
+	if goBin, err := exec.LookPath("go"); err == nil {
+		cmd := exec.Command(goBin, "build", "-o", os.DevNull, "./...")
+		cmd.Dir = p.dir
+		cmd.Env = append(os.Environ(), "GOFLAGS=", "GOPROXY=off", "GOTOOLCHAIN=local")
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("go build: %v\n%s\n%s", err, out, p.read("go.work"))
+		}
+	}
+}

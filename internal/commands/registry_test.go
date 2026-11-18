@@ -1,6 +1,8 @@
 package commands
 
 import (
+	"bytes"
+	"context"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -153,3 +155,99 @@ func TestPackageFilesGit(t *testing.T) {
 }
 
 func runtimeNotWindows() bool { return os.PathSeparator == '/' }
+
+// TestPublishWorkspace: gtr publish -r publishes the members of a monorepo
+// in dependency order, with workspace: ranges turned into registry ranges in
+// the archive's gtr.json (ADR-0012).
+func TestPublishWorkspace(t *testing.T) {
+	reg := registrytest.New(t)
+	t.Setenv("GTR_HOME", t.TempDir())
+	t.Setenv("GTR_REGISTRY", reg.URL)
+	t.Setenv("GTR_REGISTRY_TOKEN", "")
+	out := project(t, `{"name":"orm-dev","version":"0.0.0","private":true,"workspaces":["core","drivers/*","example"]}`)
+	files := map[string]string{
+		"core/gtr.json":             `{"name":"orm","version":"0.2.0","engines":{"go":">=1.22"}}`,
+		"core/orm.go":               "package orm\n",
+		"drivers/postgres/gtr.json": `{"name":"@orm/postgres","version":"0.1.0","dependencies":{"orm":"workspace:^"},"devDependencies":{"@orm/mysql":"workspace:*"}}`,
+		"drivers/postgres/pg.go":    "package postgres\n",
+		"drivers/mysql/gtr.json":    `{"name":"@orm/mysql","version":"0.1.4","dependencies":{"orm":"file:../../core"},"peerDependencies":{"@orm/postgres":"workspace:~"}}`,
+		"drivers/mysql/my.go":       "package mysql\n",
+		"example/gtr.json":          `{"name":"orm-example","version":"0.0.0","private":true,"dependencies":{"@orm/postgres":"workspace:*"}}`,
+	}
+	for name, body := range files {
+		os.MkdirAll(filepath.Dir(name), 0o755)
+		os.WriteFile(name, []byte(body), 0o644)
+	}
+	if err := Publish([]string{"-r", "--skip-tests"}); err == nil || !strings.Contains(err.Error(), "not logged in") {
+		t.Fatal(err)
+	}
+	if err := Login([]string{"--token", "gtr_ann@example.com"}); err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir("drivers/postgres") // anywhere in the workspace
+	out.Reset()
+	if err := Publish([]string{"-r", "--skip-tests"}); err != nil {
+		t.Fatal(err, out)
+	}
+	s := out.String()
+	i, j, k := strings.Index(s, "Published orm 0.2.0"), strings.Index(s, "Published @orm/postgres 0.1.0"), strings.Index(s, "Published @orm/mysql 0.1.4")
+	if i < 0 || j < 0 || k < 0 || !(i < j && j < k) || !strings.Contains(s, "- orm-example (example): private") {
+		t.Fatal(s)
+	}
+	ctx := context.Background()
+	manifestOf := func(name, version string) string {
+		c := reg.Client()
+		ix, err := c.Package(ctx, name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		dir := t.TempDir()
+		var buf bytes.Buffer
+		for _, v := range ix.Versions {
+			if v.Version == version {
+				if err := c.Download(ctx, name, version, v.SHA256, &buf); err != nil {
+					t.Fatal(err)
+				}
+			}
+		}
+		if err := registry.Extract(&buf, dir); err != nil {
+			t.Fatal(err)
+		}
+		data, _ := os.ReadFile(filepath.Join(dir, "gtr.json"))
+		return string(data)
+	}
+	if m := manifestOf("@orm/postgres", "0.1.0"); !strings.Contains(m, `"orm": "^0.2.0"`) || !strings.Contains(m, `"@orm/mysql": "workspace:*"`) {
+		t.Fatal(m) // devDependencies stay as they are
+	}
+	if m := manifestOf("@orm/mysql", "0.1.4"); !strings.Contains(m, `"orm": "^0.2.0"`) || !strings.Contains(m, `"@orm/postgres": "~0.1.0"`) {
+		t.Fatal(m)
+	}
+	if data, _ := os.ReadFile("gtr.json"); !strings.Contains(string(data), "workspace:^") {
+		t.Fatal("the member's own gtr.json was changed:", string(data))
+	}
+
+	// Again: nothing new. A bumped member alone goes up.
+	out.Reset()
+	if err := Publish([]string{"-r", "--skip-tests"}); err != nil || !strings.Contains(out.String(), "Nothing to publish") {
+		t.Fatal(err, out)
+	}
+	os.WriteFile("../mysql/gtr.json", []byte(`{"name":"@orm/mysql","version":"0.1.5","dependencies":{"orm":"workspace:^0.3"}}`), 0o644)
+	out.Reset()
+	if err := Publish([]string{"-r", "--skip-tests"}); err == nil || !strings.Contains(err.Error(), "does not match the member's version 0.2.0") {
+		t.Fatal(err, out)
+	}
+	os.WriteFile("../mysql/gtr.json", []byte(`{"name":"@orm/mysql","version":"0.1.5","dependencies":{"orm":"workspace:^0.2"}}`), 0o644)
+	out.Reset()
+	if err := Publish([]string{"-r", "--skip-tests"}); err != nil || !strings.Contains(out.String(), "Published @orm/mysql 0.1.5") || strings.Contains(out.String(), "Published orm") {
+		t.Fatal(err, out)
+	}
+
+	// A member that depends on a private one, or on a path outside, is refused.
+	os.WriteFile("gtr.json", []byte(`{"name":"@orm/postgres","version":"0.1.1","dependencies":{"orm-example":"workspace:*","x":"file:../../../x"}}`), 0o644)
+	if err := Publish([]string{"--skip-tests"}); err == nil || !strings.Contains(err.Error(), "is private") || !strings.Contains(err.Error(), "not a member") {
+		t.Fatal(err)
+	}
+	if err := Publish([]string{"-r", "--git"}); err == nil {
+		t.Fatal("-r with --git")
+	}
+}

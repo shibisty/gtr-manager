@@ -53,6 +53,8 @@ Releases:
     publish [--dry-run] [--skip-tests] [--registry <url> | --git]
                                      Check (clean, tests) and upload to the registry when
                                      logged in; --git: push the branch and the version tag
+    publish -r                       Publish every workspace member the registry does not
+                                     have yet, dependencies first (workspace:^ → ^x.y.z)
 
 Registry:
     login [--registry <url>]         Log in (email and password, or --token) and use it
