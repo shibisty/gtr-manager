@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.1.7 — 2026-11-19
+
 ### Added
 - A progress line for `gtr install` (and `add`, `update`, `ci`, `sync`) in a terminal: the phase
   (resolving, installing, Go modules, linking, writing go.mod), a bar or a counter and the
