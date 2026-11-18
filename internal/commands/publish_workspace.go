@@ -129,14 +129,6 @@ func publishWorkspace(c *registry.Client, dryRun, skipTests, allowDirty bool) er
 	if c.Token == "" && !dryRun {
 		return fmt.Errorf("not logged in to %s: run `gtr login --registry %s`", c.URL, c.URL)
 	}
-	if repo, err := findRepo(root); err == nil && !allowDirty {
-		if d, err := repo.dirty(); err != nil {
-			return err
-		} else if len(d) > 0 {
-			return fmt.Errorf("the repository has uncommitted changes (--allow-dirty to publish them anyway):\n  %s", strings.Join(firstN(d, 8), "\n  "))
-		}
-		fmt.Fprintln(Stderr, "✓ the repository is clean")
-	}
 
 	var todo []*install.Member
 	for _, mem := range memberOrder(members) {
@@ -171,6 +163,29 @@ func publishWorkspace(c *registry.Client, dryRun, skipTests, allowDirty bool) er
 	if len(todo) == 0 {
 		fmt.Fprintln(Stdout, "Nothing to publish: every member's version is in the registry (bump them with `gtr version patch`)")
 		return nil
+	}
+	// The repositories of what goes up must be clean: one for a monorepo,
+	// or each member's own (members as git submodules of the workspace).
+	if !allowDirty {
+		checked := map[string]bool{}
+		for _, mem := range todo {
+			repo, err := findRepo(mem.Abs)
+			if err != nil || checked[repo.top] {
+				continue
+			}
+			checked[repo.top] = true
+			d, err := repo.dirty()
+			if err != nil {
+				return err
+			}
+			if len(d) > 0 {
+				rel, _ := filepath.Rel(root, repo.top)
+				return fmt.Errorf("the repository %s has uncommitted changes (--allow-dirty to publish them anyway):\n  %s", filepath.ToSlash(rel), strings.Join(firstN(d, 8), "\n  "))
+			}
+		}
+		if len(checked) > 0 {
+			fmt.Fprintf(Stderr, "✓ %d repositories clean\n", len(checked))
+		}
 	}
 	var names []string
 	for _, mem := range todo {

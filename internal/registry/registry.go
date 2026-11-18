@@ -28,9 +28,9 @@ import (
 	"gtr-manager/internal/home"
 )
 
-// DefaultURL is the registry used when none is configured: a gtr-registry
-// running locally, until a public one exists.
-const DefaultURL = "http://localhost:4873"
+// DefaultURL is the registry used when none is configured: the public gtr
+// registry. A local gtr-registry is http://localhost:4873 (GTR_REGISTRY).
+const DefaultURL = "https://gtr.shibisty.com"
 
 // ConfigFile is the file of registry settings in the gtr home. It is not
 // config.json, which belongs to the gtr launcher (default versions, links).

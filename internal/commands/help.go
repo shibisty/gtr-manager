@@ -91,7 +91,7 @@ in place instead of any other source; commands in a member act on the whole work
 Packages are linked into gtr_modules/ from ~/.gtr/store; go.mod is generated.
 Scripts run go with GOPROXY=off, GOWORK=off and -mod=mod; go errors get gtr hints.
 GITHUB_TOKEN: private repositories and higher API limits.
-The registry: GTR_REGISTRY (default: the one of gtr login, else http://localhost:4873),
+The registry: GTR_REGISTRY (default: the one of gtr login, else https://gtr.shibisty.com),
 GTR_REGISTRY_TOKEN for CI; tokens are kept in ~/.gtr/registry.json.
 --offline (install, add, update, ci, sync, remove) or GTR_OFFLINE=1: only what the store has.
 `, version)

@@ -8,7 +8,13 @@
   stored as `@orm+postgres@<version>-<hash8>`; `gtr add @orm/postgres[@range]`,
   `gtr yank @orm/postgres@0.1.0`; `gtr build` names a scoped program after its last part.
 - `gtr publish -r`: publishes every workspace member that is not private and whose version
-  the registry does not have yet, dependencies first, skipping published ones.
+  the registry does not have yet, dependencies first, skipping published ones. Each
+  repository it publishes from must be clean: the monorepo, or every member's own (members
+  as git submodules of the workspace).
+
+### Changed
+- The default registry is the public `https://gtr.shibisty.com` (was `http://localhost:4873`;
+  a local one is `GTR_REGISTRY=http://localhost:4873` or `gtr login --registry …`).
 - Publishing to the registry from a workspace turns `workspace:` ranges and `file:` paths to
   members into registry ranges in the archive's gtr.json (`workspace:^` → `^1.2.3`, as pnpm);
   the member's own gtr.json is not changed. Paths outside the workspace and private members

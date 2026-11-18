@@ -209,8 +209,8 @@ archive on download, keeps it in the store, and records `"source": "registry:<ur
 checksum in `gtr.lock`. A yanked version is skipped by new installs and updates, but a project
 whose gtr.lock has it keeps installing it. `--offline` works from the store.
 
-The registry is `GTR_REGISTRY`, else the one of the last `gtr login`, else `http://localhost:4873`
-(a gtr-registry running locally, until a public one exists). Publishing:
+The registry is `GTR_REGISTRY`, else the one of the last `gtr login`, else
+`https://gtr.shibisty.com` (a gtr-registry on your machine is `http://localhost:4873`). Publishing:
 
 ```bash
 gtr login                             # email and password (or --token gtr_...), saved in ~/.gtr/registry.json

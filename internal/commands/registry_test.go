@@ -251,3 +251,48 @@ func TestPublishWorkspace(t *testing.T) {
 		t.Fatal("-r with --git")
 	}
 }
+
+// TestPublishWorkspaceOfRepositories: members that are repositories of their
+// own (git submodules of the workspace) are checked one by one, and plain
+// registry ranges between members go up unchanged.
+func TestPublishWorkspaceOfRepositories(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("no git")
+	}
+	reg := registrytest.New(t)
+	t.Setenv("GTR_HOME", t.TempDir())
+	t.Setenv("GTR_REGISTRY", reg.URL)
+	t.Setenv("GTR_REGISTRY_TOKEN", "gtr_ann@example.com")
+	out := project(t, `{"name":"passport-dev","version":"0.0.0","private":true,"workspaces":["core","strategies/*"]}`)
+	members := map[string]string{
+		"core":              `{"name":"passport","version":"0.2.0"}`,
+		"strategies/oauth2": `{"name":"@passport/oauth2","version":"0.2.0","peerDependencies":{"passport":"^0.2"}}`,
+		"strategies/github": `{"name":"@passport/github","version":"0.2.0","dependencies":{"@passport/oauth2":"^0.2"},"peerDependencies":{"passport":"^0.2"}}`,
+	}
+	for dir, m := range members {
+		os.MkdirAll(dir, 0o755)
+		os.WriteFile(filepath.Join(dir, "gtr.json"), []byte(m), 0o644)
+		os.WriteFile(filepath.Join(dir, "x.go"), []byte("package x\n"), 0o644)
+		for _, args := range [][]string{{"init", "-q"}, {"add", "."}, {"-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "init"}} {
+			cmd := exec.Command("git", args...)
+			cmd.Dir = dir
+			if b, err := cmd.CombinedOutput(); err != nil {
+				t.Fatal(string(b), err)
+			}
+		}
+	}
+	os.WriteFile("strategies/github/x.go", []byte("package x // changed\n"), 0o644)
+	if err := Publish([]string{"-r", "--skip-tests"}); err == nil || !strings.Contains(err.Error(), "strategies/github has uncommitted changes") {
+		t.Fatal(err)
+	}
+	exec.Command("git", "-C", "strategies/github", "checkout", "--", "x.go").Run()
+	out.Reset()
+	if err := Publish([]string{"-r", "--skip-tests"}); err != nil {
+		t.Fatal(err, out)
+	}
+	s := out.String()
+	if !strings.Contains(s, "✓ 3 repositories clean") || strings.Index(s, "Published @passport/oauth2") > strings.Index(s, "Published @passport/github") ||
+		strings.Contains(s, "in the archive") {
+		t.Fatal(s)
+	}
+}
