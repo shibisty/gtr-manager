@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.1.6 — 2026-11-19
+
 ### Added
 - Scoped package names (ADR-0012): `@orm/postgres`, imported as `orm/postgres` (go.mod and
   go.work have the import path, gtr.json the name). Linked at `gtr_modules/@orm/postgres`,
