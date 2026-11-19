@@ -24,7 +24,7 @@ const Default = "app"
 
 // Data fills the templates.
 type Data struct {
-	Name    string // package name = import path ("orm-mysql")
+	Name    string // package name = import path ("orm/mysql")
 	Package string // Go package identifier ("mysql")
 	Version string // initial version
 	EnvName string // for environment variables ("MYSQL")

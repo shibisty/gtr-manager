@@ -3,14 +3,14 @@ package bootstrap
 
 import (
 	"fullstack"
-	auth "fullstack-passport"
-	database "fullstack-orm"
+	auth "fullstack/passport"
+	database "fullstack/orm"
 	"orm"
-	sqlite "orm-sqlite"
+	sqlite "orm/sqlite"
 	"passport"
-	"passport-local"
+	"passport/local"
 
-	_ "modernc.org/sqlite" // the SQLite engine (pure Go) behind orm-sqlite
+	_ "modernc.org/sqlite" // the SQLite engine (pure Go) behind orm/sqlite
 
 	"{{.Name}}/app/providers"
 	"{{.Name}}/app/users"

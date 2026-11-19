@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+### Changed
+- The fullstack template (`gtr new --template fullstack`) takes its packages from the registry
+  under their scoped names: `@fullstack/validation`, `@fullstack/passport`, `@fullstack/orm`,
+  `@fullstack/testing`, `@orm/sqlite`, `@migration/orm`, `@passport/local`.
+
 ## 0.1.7 — 2026-11-19
 
 ### Added

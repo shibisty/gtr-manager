@@ -14,7 +14,7 @@ import (
 //	ORM_TEST_{{.EnvName}}_DSN=... gtr run test:integration
 //
 // The suite creates tables through orm/schema, so the Dialect must also
-// implement schema.Dialect (ColumnSQL and friends; see orm-sqlite).
+// implement schema.Dialect (ColumnSQL and friends; see orm/sqlite).
 func TestDriver(t *testing.T) {
 	dsn := os.Getenv("ORM_TEST_{{.EnvName}}_DSN")
 	if dsn == "" {
